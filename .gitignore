@@ -8,7 +8,6 @@ __pycache__/
 
 # Distribution / packaging
 .Python
-env/
 build/
 develop-eggs/
 dist/
@@ -78,12 +77,12 @@ target/
 celerybeat-schedule
 
 # dotenv
-.env
+# .env
 
 # virtualenv
-.venv/
-venv/
-ENV/
+# .venv/
+# venv/
+# ENV/
 
 # Spyder project settings
 .spyderproject
@@ -92,4 +91,6 @@ ENV/
 .ropeproject
 
 # jwst_rogue_path_tool data
-.jwst_rogue_path/data
+jwst_rogue_path_tool/data/
+config.json
+
