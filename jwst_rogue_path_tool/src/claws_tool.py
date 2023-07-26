@@ -7,12 +7,12 @@ Authors
     - Mario Gennaro
 '''
 
+import os
+
 from astroquery.simbad import Simbad
 import pysiaf
 from pysiaf.utils import rotations
 from jwst_backgrounds import jbt
-
-from apt_sql import Sqlfile
 
 import astropy.units as u
 from astropy.coordinates import SkyCoord
@@ -25,6 +25,12 @@ from matplotlib.path import Path
 import numpy as np
 import pandas as pd
 from scipy.ndimage import gaussian_filter
+
+from jwst_rogue_path_tool.src.apt_sql import Sqlfile
+from jwst_rogue_path_tool.src.utils import get_config
+
+SETTINGS = get_config()
+DATA_PATH = SETTINGS['jwst_rogue_path_data']
 
 
 class apt_program():
@@ -416,7 +422,7 @@ class observation():
             df = df[BM]
             
             c1 = SkyCoord(self.target_ra*u.deg, self.target_dec*u.deg, frame='icrs')
-            c2 = SkyCoord(df['ra']*u.deg, df['dec']*u.deg, frame='icrs')
+            c2 = SkyCoord(df['ra'].values*u.deg, df['dec'].values*u.deg, frame='icrs')
             sep = c1.separation(c2)
             BM = (sep.deg < outer_rad) & (sep.deg > inner_rad)
             
@@ -1322,7 +1328,7 @@ class rogue_path_intensity():
             filename = 'Rogue path NCA.fits'
         else:
             filename = 'Rogue path NCB.fits'
-        self.filename = 'path/to/future/datadir'+filename
+        self.filename = os.path.join(DATA_PATH, filename)
         self.fh = fits.getheader(self.filename)
         
         if smooth is not None:
@@ -1374,7 +1380,7 @@ class zero_point_calc():
     Get the average quantities (eg zp_vega og PHOTMJSR) over SCAs for a PUPIL+FILTER combo
     '''
     
-    def __init__(self,filename='/path/to/future/datadir/' + 'NRC_ZPs_0995pmap.txt'):
+    def __init__(self,filename=os.path.join(DATA_PATH, 'NRC_ZPs_0995pmap.txt')):
 
         df = pd.read_csv(filename,skiprows=4,sep='|',names= [y.strip() for y in 'dum | pupil+filter |      sca | PHOTMJSR | zp_vega |  vega_Jy | zp_AB | mean_pix_sr | dum2'.split('|')])
         df.drop(columns=['dum','dum2'],inplace=True)
@@ -1477,7 +1483,7 @@ class filter_info():
     Get info on filter wavelengths and bandpass
     '''    
 
-    def __init__(self,filename= '/path/to/future/data_dir/' + 'Filter_info.txt'):
+    def __init__(self, filename= os.path.join(DATA_PATH, 'Filter_info.txt')):
 
         self.filter_table = pd.read_csv(filename,sep='\s+')
 
