@@ -26,8 +26,8 @@ import numpy as np
 import pandas as pd
 from scipy.ndimage import gaussian_filter
 
-from jwst_rogue_path_tool.src.apt_sql import Sqlfile
-from jwst_rogue_path_tool.src.utils import get_config
+from jwst_rogue_path_tool.jwst_rogue_path_tool.apt_sql_parser import Sqlfile
+from jwst_rogue_path_tool.jwst_rogue_path_tool.utils import get_config
 
 SETTINGS = get_config()
 DATA_PATH = SETTINGS['jwst_rogue_path_data']
@@ -139,8 +139,6 @@ class apt_program():
         else:
             if nrcparallel:
                 print('**** NIRCam imaging used in parallel ****')
-                
-        
 
         BM = (self.exptable['observation'] == obsid) & (self.exptable['pointing_type'] == 'SCIENCE') \
               & (self.exptable['AperName'].str.contains(prefix))               
@@ -148,6 +146,7 @@ class apt_program():
         if np.sum(BM)==0:
             print('No {} expsoures in this program for obsid {}'.format(self.instrument,obsid))
             return None
+
         print('Total number of {} exposures in this observation: {}'.format(self.instrument,np.sum(BM)))
         exptable_obs = self.exptable[BM]
 
@@ -161,52 +160,6 @@ class apt_program():
         
         BM = self.nrctemptable['observation'] == obsid
         modules = self.nrctemptable[BM].iloc[0]['modules']
-
-
-##### This part must go. Refactor the check one angle to check only for a single exposure specification
-
-#       nes_ids = nestable['order_number']
-#       pcds = np.empty(len(nes_ids))
-#       zps = np.empty(len(nes_ids))
-#       ps = np.empty(len(nes_ids),dtype=object)
-#       fs = np.empty(len(nes_ids),dtype=object)
-#       
-#       zpc = zero_point_calc()
-#       print('{:4} {:8} {:8} {:6} {:6} {:6}'.format('ID','PUPIL','FILTER','T_exp','   ZP','  K'))
-#
-#       for i,nes_id in enumerate(nes_ids):
-#           BM = exptable_obs['exposure_spec_order_number'] == nes_id
-#           pcds[i] = exptable_obs.loc[BM,'photon_collecting_duration'].values.astype(np.float_).sum()
-#           
-#           BM = nestable['order_number'] == nes_id
-#           filtershort = nestable.loc[BM,'filter_short'].values[0]
-#           if '_' in filtershort:
-#               splt = filtershort.split('_')
-#               pupilshort = splt[0]
-#               filtershort = splt[1]
-#           else:
-#               pupilshort = 'CLEAR'
-#           zps[i] = zpc.get_avg_zp(pupilshort,filtershort)
-#           ps[i],fs[i] = pupilshort, filtershort
-#           print('{:4} {:8} {:8} {:6.0f} {:6.2f} {:.2e}'.format(i,ps[i],fs[i],pcds[i],zps[i],pcds[i]*10**(zps[i]/2.5)))
-#
-#       if nes is None:                
-#           cts_estimate = pcds*10**(zps/2.5)
-#           ines = np.argmax(cts_estimate)
-#           idxnes = nes_ids.index[ines]
-#           nes = nes_ids[idxnes]
-#           print('Exposure specification to use:{}, (idx={}); using PUPILSHORT={}, FILTERSHORT={}'.format(nes,ines,ps[ines],fs[ines]))
-#       else:
-#           print('Forcing use of exposure specification:{}, (idx={}); using PUPILSHORT={}, FILTERSHORT={}'.format(nes,nes+1,ps[nes],fs[nes]))
-#       
-#           
-#
-#       BM = exptable_obs['exposure_spec_order_number'] == nes
-#       exptable_obs = exptable_obs[BM]
-#
-#
-#       BM = nestable['order_number'] == nes
-#       nestable_obs = nestable[BM]
 
         targetrowidx = self.targtable['target_id'] == exptable_obs.iloc[0]['target_id']
         target_ra  = self.targtable.loc[targetrowidx,'ra_computed'].values[0]
@@ -1494,12 +1447,3 @@ class filter_info():
             check_value = pupilshort
         BM = self.filter_table['Filter'] == check_value
         return self.filter_table.loc[BM,key_info].values[0]
-
-
-
-
-
-
-
-
-    
