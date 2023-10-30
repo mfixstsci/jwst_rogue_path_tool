@@ -27,7 +27,7 @@ class AptSqlFile:
         if len(keys) == 0:
             raise Exception("no '" + tablename + "' table in " + self.__sqlfile)
 
-        table = self.build_metadata_table(rows, keys)
+        table = self.build_aptsql_metadata_table(rows, keys)
 
         if browser:
             self.show_table_in_browser(table)

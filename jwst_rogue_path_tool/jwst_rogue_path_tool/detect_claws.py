@@ -26,14 +26,14 @@ import numpy as np
 import pandas as pd
 from scipy.ndimage import gaussian_filter
 
-from jwst_rogue_path_tool.jwst_rogue_path_tool.apt_sql_parser import Sqlfile
+from jwst_rogue_path_tool.jwst_rogue_path_tool.apt_sql_parser import AptSqlFile
 from jwst_rogue_path_tool.jwst_rogue_path_tool.utils import get_config
 
 SETTINGS = get_config()
 DATA_PATH = SETTINGS['jwst_rogue_path_data']
 
 
-class apt_program():
+class AptProgram():
 
     '''
     Class that handles the APT-program-level information.
@@ -43,139 +43,157 @@ class apt_program():
     given observation and for multiple observations of a given program
     '''
 
-    def __init__(self,sqlfile,instrument='NIRCAM'):
+    def __init__(self, sqlfile, instrument='NIRCAM'):
         '''
         Parameters
         ----------
         sqlfile : str
             Path to an APT-exported sql file 
 
-        catargs : dictionary
-            parameters to be passed to the get_catalog method of an observation object
+        instrument : str
+            JWST Instrument name 
         '''       
                 
-        sql = Sqlfile(sqlfile)
+        sql = AptSqlFile(sqlfile)
 
-        self.exptable = sql.table('exposures').to_pandas()
+        self.exposure_table = sql.table('exposures').to_pandas()
+
         try:
-            self.targtable = sql.table('fixed_target').to_pandas()
+            self.target_table = sql.table('fixed_target').to_pandas()
         except:
-            print('**** This is a moving target program, exiting ****')
-            assert False
-        self.nrctemptable = sql.table('nircam_templates').to_pandas()
-        self.nestable = sql.table('nircam_exposure_specification').to_pandas()
-        self.visittable = sql.table('visit').to_pandas()
+            raise ValueError('**** This is a moving target program, exiting ****')
+
+        self.nrc_template_table = sql.table('nircam_templates').to_pandas()
+        self.nes_table = sql.table('nircam_exposure_specification').to_pandas()
+        self.visit_table = sql.table('visit').to_pandas()
         
         self.instrument = instrument
-        self.PID = self.exptable.iloc[0]['program']
+        self.program_id = self.exposure_table.iloc[0]['program']
         self.siaf = pysiaf.Siaf(self.instrument)
         self.observations = []
 
-    def configure_observation(self,obsid,catargs,smallregion=False,nes=None):
+    def configure_observation(self, observation_id, catalog_args, small_region=False, nrc_exp_spectral_order=None):
         '''
         Create an observation object
 
         Parameters
         ----------
-        obsid: index of a Pandas dataframe
+        observation_id: index of a Pandas dataframe
             Represents the observation ID of interest
             
-        catargs: dictionary
+        catalog_args: dictionary
             parameters to be passed to the get_catalog method of an observation object
             
-        smallregion: boolean
+        small_region: boolean
             if True restricts the search to a smaller susceptibility region
-            in the rogue path
+            in the rogue path (default: False)
             
-        nes: integer
+        nrc_exp_spectral_order: integer
             specifies which exposure_spec_order_number to use. If None, the code will
             select the exposure_spec_order_number corresponding to the highest number 
             of expected counts (based on photon collecting time and zero point value)
+            (default: None)
 
         Returns
-        ----------
+        -------
         An observation object. Returns None if no exposures are present with the input
-        obsid in the APT-exported sql file
+        observation_id in the APT-exported sql file
         '''
 
-        print('Adding obsid:',obsid)        
+        print('Adding observation_id:', observation_id)
 
         if self.instrument == 'NIRCAM':
-            prefix = 'NRC'
+            instrument_prefix = 'NRC'
 
-        obsskip = False
-        nrcused = False
-        nrcparallel = False
-        BM = self.visittable['observation'] == obsid
-        fvt = self.visittable[BM].iloc[0]
-        if ((fvt['template'] != 'NIRCam Imaging') & (fvt['template'] != 'NIRCam Wide Field Slitless Spectroscopy')):
-            if 'template_coord_parallel_1' in self.visittable.columns:
-                if ((fvt['template_coord_parallel_1'] != 'NIRCam Imaging') & (fvt['template_coord_parallel_1'] != 'NIRCam Wide Field Slitless Spectroscopy')):
-                    obsskip = True
-                    if 'NIRC' in fvt['template']:
-                        template_name = fvt['template']
-                        nrcused = True
-                    elif 'NIRC' in fvt['template_coord_parallel_1']:
-                        template_name = fvt['template_coord_parallel_1']
-                        nrcused = True
+        skip_observation = False
+        nrc_used = False
+        nrc_parallel = False
+
+        # Get all visits in the observation.
+        boolean_mask = self.visit_table['observation'] == observation_id
+
+        # Get the first visit to obtain the observation information since all visits use the same template.
+        first_visit_table = self.visit_table[boolean_mask].iloc[0]
+
+        if ((first_visit_table['template'] != 'NIRCam Imaging') & (first_visit_table['template'] != 'NIRCam Wide Field Slitless Spectroscopy')):
+
+            if 'template_coord_parallel_1' in self.visit_table.columns:
+
+                if ((first_visit_table['template_coord_parallel_1'] != 'NIRCam Imaging') & (first_visit_table['template_coord_parallel_1'] != 'NIRCam Wide Field Slitless Spectroscopy')):
+                    skip_observation = True
+
+                    if 'NIRC' in first_visit_table['template']:
+                        template_name = first_visit_table['template']
+                        nrc_used = True
+                    elif 'NIRC' in first_visit_table['template_coord_parallel_1']:
+                        template_name = first_visit_table['template_coord_parallel_1']
+                        nrc_used = True
+
                 else:
-                    nrcparallel = True
-                    nrcused = True
+                    nrc_parallel = True
+                    nrc_used = True
 
             else:
-                obsskip = True
-                if 'NIRC' in fvt['template']:
-                    template_name = fvt['template']
-                    nrcused = True
+                skip_observation = True
+
+                if 'NIRC' in first_visit_table['template']:
+                    template_name = first_visit_table['template']
+                    nrc_used = True
+
         else:
-            nrcused = True
+            nrc_used = True
                 
-        if obsskip:
-            if nrcused:
-                print('**** The {} template is not supported, obsid {} will not be added ****'.format(template_name,obsid))
+        if skip_observation:
+            if nrc_used:
+                print('**** The {} template is not supported, observation_id {} will not be added ****'.format(template_name,
+                                                                                                               observation_id))
             else:
-                print('**** obsid {} does not use NIRCam and will not be added ****'.format(obsid))
+                print('**** observation_id {} does not use NIRCam and will not be added ****'.format(observation_id))
             return None
         else:
-            if nrcparallel:
+            if nrc_parallel:
                 print('**** NIRCam imaging used in parallel ****')
 
-        BM = (self.exptable['observation'] == obsid) & (self.exptable['pointing_type'] == 'SCIENCE') \
-              & (self.exptable['AperName'].str.contains(prefix))               
+        boolean_mask = (self.exposure_table['observation'] == observation_id) & (self.exposure_table['pointing_type'] == 'SCIENCE') \
+              & (self.exposure_table['AperName'].str.contains(instrument_prefix))               
         
-        if np.sum(BM)==0:
-            print('No {} expsoures in this program for obsid {}'.format(self.instrument,obsid))
+        if np.sum(boolean_mask)==0:
+            print('No {} expsoures in this program for observation_id {}'.format(self.instrument, observation_id))
             return None
 
-        print('Total number of {} exposures in this observation: {}'.format(self.instrument,np.sum(BM)))
-        exptable_obs = self.exptable[BM]
+        print('Total number of {} exposures in this observation: {}'.format(self.instrument, np.sum(boolean_mask)))
+        exposure_table_obs = self.exposure_table[boolean_mask]
 
-        BM = (self.nestable['observation'] == obsid) 
-        print('Total number of {} exposure specifications: {}'.format(self.instrument,np.sum(BM)))
-        nestable_obs = self.nestable[BM]
+        boolean_mask = (self.nes_table['observation'] == observation_id) 
+        print('Total number of {} exposure specifications: {}'.format(self.instrument, np.sum(boolean_mask)))
+        nes_table_obs = self.nes_table[boolean_mask]
         
-        BM = (self.visittable['observation'] == obsid) 
-        print('Total number of visits: {}'.format(np.sum(BM)))
-        visittable_obs = self.visittable[BM]
+        boolean_mask = (self.visit_table['observation'] == observation_id) 
+        print('Total number of visits: {}'.format(np.sum(boolean_mask)))
+        visit_table_obs = self.visit_table[boolean_mask]
         
-        BM = self.nrctemptable['observation'] == obsid
-        modules = self.nrctemptable[BM].iloc[0]['modules']
+        boolean_mask = self.nrc_template_table['observation'] == observation_id
+        modules = self.nrc_template_table[boolean_mask].iloc[0]['modules']
 
-        targetrowidx = self.targtable['target_id'] == exptable_obs.iloc[0]['target_id']
-        target_ra  = self.targtable.loc[targetrowidx,'ra_computed'].values[0]
-        target_dec = self.targtable.loc[targetrowidx,'dec_computed'].values[0]
+        target_row_idx = self.target_table['target_id'] == exposure_table_obs.iloc[0]['target_id']
+        target_ra  = self.target_table.loc[target_row_idx,'ra_computed'].values[0]
+        target_dec = self.target_table.loc[target_row_idx,'dec_computed'].values[0]
 
-        return observation(exptable_obs,nestable_obs,visittable_obs,target_ra,target_dec,modules,catargs,self.siaf,smallregion=smallregion)
-        
-    def add_observations(self,obsids=None,catargs={'inner_rad':8.,'outer_rad':12.,'sourcecat':'SIMBAD',
-                                       'band':'K','maxmag':4.,'simbad_timeout':200,'verbose':True},smallregion=False):
+        return self.observation(exposure_table_obs, nes_table_obs,
+                                visit_table_obs, target_ra, target_dec,
+                                modules, catalog_args, self.siaf, smallregion=small_region)
+
+    def add_observations(self, observation_ids=None, 
+                         catargs={'inner_rad':8.,'outer_rad':12.,'sourcecat':'SIMBAD',
+                                  'band':'K','maxmag':4.,'simbad_timeout':200,'verbose':True},
+                         smallregion=False):
 
         '''
         Configure multiple observations and append them to the self.observations list
         
         Parameters
         ----------
-        obsid: list of Pandas indexes
+        observation_id: list of Pandas indexes
             IDs of the observations to add. If None, all the opbservations in the prgram
             will be added
 
@@ -183,21 +201,24 @@ class apt_program():
             parameters to be passed to the get_catalog method of an observation object
         '''
 
-        if obsids is None:
-            obsids = self.exptable['observation'].unique()
-        for obsid in obsids:
+        if observation_ids is None:
+            observation_ids = self.exposure_table['observation'].unique()
+
+        for observation_id in observation_ids:
             added = False
+
             for obs in self.observations:
-                if obsid == obs.obsid:
-                    print('Obsid {} already added'.format(obsid))
+                if observation_id == obs.observation_id:
+                    print('observation_id {} already added'.format(observation_id))
                     added = True
                     break
+
             if added == False:
-                obshere = self.configure_observation(obsid,catargs,smallregion=smallregion)
+                obshere = self.configure_observation(observation_id,catargs,smallregion=smallregion)
                 if obshere is not None:
                     self.observations.append(obshere)
 
-    def check_observations(self,obsids=None,angstep=0.5,RP_padding=0):
+    def check_observations(self,observation_ids=None,angstep=0.5,RP_padding=0):
     
         '''
         Convenience function to check multiple observations for stars in the 
@@ -205,7 +226,7 @@ class apt_program():
         
         Parameters
         ----------
-        obsid: list of Pandas indexes
+        observation_id: list of Pandas indexes
             IDs of the observations to check. If None, all the opbservations in the prgram
             will be added
 
@@ -217,17 +238,17 @@ class apt_program():
             SR, but within RP_padding are flagged as "inside")
         '''
     
-        if obsids is None:
-            obsids = self.exptable['observation'].unique()
-        for obsid in obsids:
+        if observation_ids is None:
+            observation_ids = self.exposure_table['observation'].unique()
+        for observation_id in observation_ids:
             for obs in self.observations:
-                if obs.obsid == obsid:
-                    print('Checking obsid:',obsid)
+                if obs.observation_id == observation_id:
+                    print('Checking observation_id:',observation_id)
                     obs.check_multiple_angles(angstep,RP_padding=0.)
 
 
 
-class observation():
+class Observation():
 
     '''
     Class that handles an indivdual observation.
@@ -237,19 +258,19 @@ class observation():
     '''
 
 
-    def __init__(self,exptable_obs,nestable_obs,visittable_obs,target_ra,target_dec,modules,catargs,siaf,smallregion=False):
+    def __init__(self,exposure_table_obs,nes_table_obs,visit_table_obs,target_ra,target_dec,modules,catargs,siaf,smallregion=False):
 
         '''
         Parameters
         ----------
-        exptable_obs: Pandas dataframe
+        exposure_table_obs: Pandas dataframe
             contains one row from the exposure table, per each exposure within the observation
             
-        nestable_obs: Pandas dataframe
+        nes_table_obs: Pandas dataframe
             contains one row from nircam_exposures_specification table for each exposure specification
              selected for this observation
 
-        visittable_obs: Pandas dataframe
+        visit_table_obs: Pandas dataframe
             contains one row from the visit table for each visit associated to this observation
 
 
@@ -267,10 +288,10 @@ class observation():
             object containing the apertures info for NIRCam
         '''
         
-        self.exptable_obs = exptable_obs
-        self.nestable_obs = nestable_obs
-        self.obsid = self.exptable_obs.iloc[0]['observation']
-        self.program = self.exptable_obs.iloc[0]['program']
+        self.exposure_table_obs = exposure_table_obs
+        self.nes_table_obs = nes_table_obs
+        self.observation_id = self.exposure_table_obs.iloc[0]['observation']
+        self.program = self.exposure_table_obs.iloc[0]['program']
         self.target_ra = target_ra
         self.target_dec = target_dec
         self.modules = modules
@@ -320,11 +341,11 @@ class observation():
 
 
         efs = []
-        for i,row in self.exptable_obs.iterrows():
+        for i,row in self.exposure_table_obs.iterrows():
         
-            BM = (self.nestable_obs['visit'] == row['visit']) & \
-                 (self.nestable_obs['order_number'] == row['exposure_spec_order_number'])
-            efs.append(exposure_frame(row,siaf,self.nestable_obs.loc[BM]))
+            boolean_mask = (self.nes_table_obs['visit'] == row['visit']) & \
+                 (self.nes_table_obs['order_number'] == row['exposure_spec_order_number'])
+            efs.append(exposure_frame(row,siaf,self.nes_table_obs.loc[boolean_mask]))
         return efs
 
     def get_catalog(self):
@@ -342,8 +363,8 @@ class observation():
         '''    
 
         # Get the maximum relative offset between exposures and pad the catalog search radius
-        ra_cen_sorted = np.sort(self.exptable_obs['ra_center_rotation'].values.astype(np.float_))
-        dec_cen_sorted = np.sort(self.exptable_obs['dec_center_rotation'].values.astype(np.float_))
+        ra_cen_sorted = np.sort(self.exposure_table_obs['ra_center_rotation'].values.astype(np.float_))
+        dec_cen_sorted = np.sort(self.exposure_table_obs['dec_center_rotation'].values.astype(np.float_))
 
         max_ra_diff = np.abs(ra_cen_sorted[-1]-ra_cen_sorted[0])
         max_dec_diff = np.abs(dec_cen_sorted[-1]-dec_cen_sorted[0])
@@ -371,21 +392,20 @@ class observation():
                 
         if self.catargs['sourcecat'] == '2MASS':
             df = pd.read_csv(self.catargs['2MASS_filename'])
-            BM = df[self.catargs['band']] < self.catargs['maxmag']
-            df = df[BM]
+            boolean_mask = df[self.catargs['band']] < self.catargs['maxmag']
+            df = df[boolean_mask]
             
             c1 = SkyCoord(self.target_ra*u.deg, self.target_dec*u.deg, frame='icrs')
             c2 = SkyCoord(df['ra'].values*u.deg, df['dec'].values*u.deg, frame='icrs')
             sep = c1.separation(c2)
-            BM = (sep.deg < outer_rad) & (sep.deg > inner_rad)
+            boolean_mask = (sep.deg < outer_rad) & (sep.deg > inner_rad)
             
-            df=df[BM]
+            df=df[boolean_mask]
             df.rename(columns={'ra': 'RAdeg', 'dec': 'DECdeg'},inplace=True)
             
         
         return df
-        
-     
+
     def check_multiple_angles(self,angstep,filtershort=None,RP_padding=0.):
 
         '''
@@ -408,9 +428,9 @@ class observation():
         '''
 
         if filtershort is None:
-            filtershort = self.nestable_obs['filter_short'].values[0]
+            filtershort = self.nes_table_obs['filter_short'].values[0]
 
-        efs_here = [ef for ef in self.efs if ef.nestable_row['filter_short'].values[0] == filtershort]
+        efs_here = [ef for ef in self.efs if ef.nes_table_row['filter_short'].values[0] == filtershort]
 
         self.angstep = angstep
         self.RP_padding = RP_padding
@@ -442,9 +462,7 @@ class observation():
         else:
              V3PA_validranges_starts.append(None)
              V3PA_validranges_ends.append(None)
-        
-        
-        
+
         self.good_angles_obs = np.all(self.good_angles,axis=1)
 
         V3PA_validranges_obs_starts= []
@@ -466,7 +484,6 @@ class observation():
         self.V3PA_validranges_ends = V3PA_validranges_ends
         self.V3PA_validranges_obs_starts = V3PA_validranges_obs_starts
         self.V3PA_validranges_obs_ends = V3PA_validranges_obs_ends
-
 
     def check_one_angle(self,att,filtershort,RP_padding=0.):
 
@@ -496,7 +513,7 @@ class observation():
             True if any star is in either SRs for a given exposure
         '''
 
-        efs_here = [ef for ef in self.efs if ef.nestable_row['filter_short'].values[0] == filtershort]
+        efs_here = [ef for ef in self.efs if ef.nes_table_row['filter_short'].values[0] == filtershort]
 
         IN_one = np.empty([len(self.catdf),len(self.SRlist),len(efs_here)],dtype=np.bool_)
         V2_one = np.empty([len(self.catdf),len(efs_here)])
@@ -517,220 +534,6 @@ class observation():
                     check_one[k] =  True
  
         return IN_one, V2_one, V3_one, check_one
-
-        
-    def plot_obs_field(self,bandpass):
-        '''
-        Method to plot the stars in the catalog
-        
-        Parameters
-        ----------
-        bandpass: string
-            bandpass to use for color-coding the stars
-        '''
-
-        f,ax = plt.subplots(1,1)
-        
-        ax.scatter(self.catdf['RAdeg'],self.catdf['DECdeg'],c=self.catdf[bandpass])
-        for ef in self.efs:
-            ax.scatter(ef.raRef,ef.decRef,marker='o',c='orange')
-        ax.scatter(self.target_ra,self.target_dec,marker='X',c='red')
-        
-        
-        ax.axis('equal')
-        ax.set_xlabel('RA')
-        ax.set_ylabel('Dec')
-        ax.invert_xaxis()
-        f.tight_layout()
-        
-    def DN_report(self,attitudes,RP_padding=0.,draw_reports=True,background_params=[{'threshold':0.1,'func':np.min}],
-                  save_report_dir=None,save_figures_dir=None,verbose=False,smooth=None):
-        '''
-        Method to call fixed_angle multiple times and get an estimated DN/pix/s for each
-        filter in this observation, as a function of v3PA
-
-        Paramters
-        ---------
-
-        attitudes: numpy array
-            values of the attitudes at which one wants to compute the DN
-
-        background_params: list of dictionarie (can be None)
-           the claw flux is compared to threshold*func(background)
-           where func is np.mean/np.min/np.max/np.median 
-           (or other callable that returns some summary stats),
-           for each of the items of the list
-
-        '''
-       
-        tmA = []
-        tmB = []
-        tcA = []
-        tcB = []
-
-        for i,att in enumerate(attitudes):
-            rd = self.fixed_angle(att,RP_padding=RP_padding,draw_allexp=False,draw_summary=False,smooth=smooth)
-            if i == 0:
-                tot_exp_dur = rd['tot_exp_dur']
-                filtershort_all = rd['filtershort_all']
-                filternames = rd['filternames']
-                pupilnames = rd['pupilnames']
-
-            tmA.append(rd['totmag_A']) 
-            tmB.append(rd['totmag_B']) 
-            tcA.append(rd['totcts_A']) 
-            tcB.append(rd['totcts_B']) 
-
-        tmA = np.array(tmA)
-        tmB = np.array(tmB)
-        tcA = np.array(tcA)
-        tcB = np.array(tcB)
-
-        if (self.modules == 'ALL') | (self.modules == 'BOTH'):
-            tms = [tmA,tmB]
-            tcs = [tcA,tcB]
-        else:
-            if self.modules[0] == 'A':
-                tms = [tmA]
-                tcs = [tcA]
-            elif self.modules[0] == 'B':
-                tms = [tmB]
-                tcs = [tcB]
-
-
-
-        if draw_reports == True:
-
-            nexpspec = np.max(np.array([tcA.shape[1],tcB.shape[1]]))
-            nmodules = len(self.SRlist)
-           
-            f,ax = plt.subplots(3,nmodules,figsize=(5*nmodules,6),sharex=True,sharey='row',squeeze=False)
-
-            j_m = np.empty([attitudes.size,nmodules])
-            h_m = np.empty([attitudes.size,nmodules])
-            k_m = np.empty([attitudes.size,nmodules])
-            DNs = np.empty([attitudes.size,nexpspec,nmodules])
-            for i,att in enumerate(attitudes):
-                for j in range(nmodules):
-                    j_m[i,j] = tms[j][i]['j_m']
-                    h_m[i,j] = tms[j][i]['h_m']
-                    k_m[i,j] = tms[j][i]['k_m']
-                    DNs[i,:,j] = tcs[j][i]
-
-            for j in range(nmodules):
-                ax[0,j].plot(attitudes,j_m[:,j])
-                ax[1,j].plot(attitudes,h_m[:,j])
-                ax[2,j].plot(attitudes,k_m[:,j])
-
-      
-            ax[0,0].set_ylabel('j_m')
-            ax[1,0].set_ylabel('h_m')
-            ax[2,0].set_ylabel('k_m')
-            
-            for k in range(3):
-                ax[k,0].set_ylim(24,12)
-
-            ax[0,0].set_xlim(0,360)
-            for j in range(nmodules):
-                ax[2,j].set_xlabel('V3_PA')
-                ax[0,j].set_title('Module {}'.format(self.SRnames[j]))
-                
-
-            f.tight_layout()
-            
-            if save_figures_dir is not None:
-                f.savefig(save_figures_dir+'PID{}_obsid{}_mag_sweep.pdf'.format(self.program,self.obsid))
-
-            nexpspec = np.max(np.array([tcA.shape[1],tcB.shape[1]]))
-            prop_cycle = plt.rcParams['axes.prop_cycle']
-            colors = prop_cycle.by_key()['color']
- 
-            if background_params is not None:
-                fi = filter_info()
-                zpc = zero_point_calc()
-                bg = []
-                ra = self.target_ra
-                dec = self.target_dec
-                for j in range(nexpspec):
-                    wave = fi.get_info(pupilnames[j],filternames[j])
-                    PHOTMJSR = zpc.get_avg_quantity(pupilnames[j],filternames[j],quantity='PHOTMJSR')
-                    bg.append(jbt.background(ra,dec,wave))
-                
-                res = []
-                
-                for bp in background_params:    
-                    below_threshold = np.ones_like(DNs,dtype=np.bool_)
-                        
-                    for k in range(nexpspec):
-                        bck_lambda = bp['threshold']*bp['func'](bg[k].bathtub['total_thiswave'])/PHOTMJSR*1000.
-                        for j in range(nmodules):
-                            below_threshold[:,k,j] = DNs[:,k,j]*1000./tot_exp_dur[k] < bck_lambda
-
-                    below_threshold = np.all(below_threshold,axis=(1,2))
-                    V3PA_validranges_obs_starts= []
-                    V3PA_validranges_obs_ends  = []
-
-                    change = np.where(below_threshold[:-1] != below_threshold[1:])[0]
-                    if change.size >0:
-                        if below_threshold[change[0]]:
-                            change = np.roll(change,1)
-                    
-                        V3PA_validranges_obs_starts = attitudes[change[::2]]
-                        V3PA_validranges_obs_ends = attitudes[change[1::2]]
-                    else:
-                        V3PA_validranges_obs_starts = None
-                        V3PA_validranges_obs_ends = None
-                    if verbose == True:
-                        print('{:3.1f} x {}(bkg)'.format(bp['threshold'],bp['func'].__name__))
-                        for s,e in zip(V3PA_validranges_obs_starts,V3PA_validranges_obs_ends):
-                            print(s,e)
-                        
-                    res.append({'s':V3PA_validranges_obs_starts,'e':V3PA_validranges_obs_ends,'bt':below_threshold})
-                    
-            if save_report_dir is not None:
-                for r,bp in zip(res,background_params):
-                    filenm = 'PID{}_obsid{}_report_thr{}_{}.txt'.format(self.program,self.obsid,bp['threshold'],bp['func'].__name__)
-                    with open(save_report_dir+filenm, 'w') as the_file:
-                        the_file.write('*** Valid ranges for PID: {}, obsid:{} ****\n'.format(self.program,self.obsid))
-                        if r['s'] is not None:
-                            for s,e in zip(r['s'],r['e']):
-                                the_file.write('PA Start -- PA End: {} -- {}\n'.format(s,e))
-                        else:
-                            the_file.write('PA Start -- PA End: {} -- {}\n'.format(0.,360.))
-
-            f,ax = plt.subplots(nexpspec,nmodules,figsize=(5*nmodules,nexpspec*2),sharex=True,sharey=True,squeeze=False)
-
-            for k in range(nexpspec):
-                for j in range(nmodules):
-                    ax[k,j].plot(attitudes,DNs[:,k,j]*1000./tot_exp_dur[k])
-                    if background_params is None:
-                        ax[k,j].axhline(1,linestyle='dashed',label='1DN/pix/ks',c=colors[1])
-
-                    else:
-                        for l,bp in enumerate(background_params):
-                            bck_lambda = bp['threshold']*bp['func'](bg[k].bathtub['total_thiswave'])/PHOTMJSR*1000.
-                            ax[k,j].axhline(bck_lambda,linestyle='dashed',label='{:3.1f} x {}(bkg) = {:5.1f} DN/pix/ks'.format(bp['threshold'],bp['func'].__name__,bck_lambda),c=colors[1+l])                        
-                            x2p = np.copy(attitudes)
-                            y2p = np.copy(DNs[:,k,j])
-                            x2p[res[l]['bt']] = np.nan
-                            y2p[res[l]['bt']] = np.nan
-                            ax[k,j].plot(x2p,y2p*1000./tot_exp_dur[k],c=colors[1+l])
-                    ax[k,j].legend()
-
-                ax[k,0].set_ylabel('DN/pix/ks ({})'.format(filtershort_all[k]))
-                ax[k,0].set_ylim(0.005,500)
-                ax[k,0].set_yscale('log')
-
-            ax[0,0].set_xlim(0,360)
-            for j in range(nmodules):
-                ax[0,j].set_title('Module {}'.format(self.SRnames[j]))
-                ax[-1,j].set_xlabel('V3_PA')
-
-            f.tight_layout()
-            if save_figures_dir is not None:
-                f.savefig(save_figures_dir+'PID{}_obsid{}_DN_sweep.pdf'.format(self.program,self.obsid))
-
-        return tms, tcs
 
     def fixed_angle(self,att,RP_padding=0.,smooth=None,draw_allexp=True,draw_summary=True,nrows=2,ncols=3,savefilenames=[None,None],metainfo=None):
     
@@ -772,31 +575,31 @@ class observation():
         filtershort_all = []
         tot_exp_dur = []
 
-        exp_spec_orders = self.nestable_obs['order_number'].unique()
+        exp_spec_orders = self.nes_table_obs['order_number'].unique()
         for exp_spec_order in exp_spec_orders:
-            BM = self.exptable_obs['exposure_spec_order_number'] == exp_spec_order
-            tot_exp_dur.append(self.exptable_obs.loc[BM,'photon_collecting_duration'].values.astype(np.float_).sum())
-            BM = self.nestable_obs['order_number'] == exp_spec_order
-            filtershort_all.append(self.nestable_obs.loc[BM,'filter_short'].values[0])
+            boolean_mask = self.exposure_table_obs['exposure_spec_order_number'] == exp_spec_order
+            tot_exp_dur.append(self.exposure_table_obs.loc[boolean_mask,'photon_collecting_duration'].values.astype(np.float_).sum())
+            boolean_mask = self.nes_table_obs['order_number'] == exp_spec_order
+            filtershort_all.append(self.nes_table_obs.loc[boolean_mask,'filter_short'].values[0])
         tot_exp_dur = np.asarray(tot_exp_dur,dtype=np.float_)
 
-        efs_here = [ef for ef in self.efs if ef.nestable_row['filter_short'].values[0] == filtershort_all[0]]
+        efs_here = [ef for ef in self.efs if ef.nes_table_row['filter_short'].values[0] == filtershort_all[0]]
 
         # It is sufficient to check all the exposures for a single filter, because all the various exposure specifications
         # will results in an identical number of exposures, with identical pointings across the whole observation
-        
+
         IN_one, V2_one, V3_one, check_one = self.check_one_angle(att,filtershort_all[0],RP_padding=RP_padding)
         colors = ['tomato','olivedrab']
-        
+
         rpi_A = rogue_path_intensity(module='A',smooth=smooth)
         rpi_B = rogue_path_intensity(module='B',smooth=smooth)
-        
+
         intensities_A = rpi_A.get_intensity(V2_one,V3_one)
         intensities_B = rpi_B.get_intensity(V2_one,V3_one)
-        
+
         avg_intensity_A = np.mean(intensities_A,axis=1)
         avg_intensity_B = np.mean(intensities_B,axis=1)
-        
+
         avg_V2 = np.mean(V2_one,axis=1)
         avg_V3 = np.mean(V3_one,axis=1)
         zp = 17 
@@ -839,17 +642,18 @@ class observation():
         for band in bands:
             fict_mag_A[band] = self.catdf[band] - 2.5*np.log10(avg_intensity_A) + zp
             fict_mag_B[band] = self.catdf[band] - 2.5*np.log10(avg_intensity_B) + zp
-            BM_A = fict_mag_A[band] == np.inf
-            fict_mag_A[band][BM_A] = 99.
-            BM_B = fict_mag_B[band] == np.inf
-            fict_mag_B[band][BM_B] = 99.
+            boolean_mask_A = fict_mag_A[band] == np.inf
+            fict_mag_A[band][boolean_mask_A] = 99.
+            boolean_mask_B = fict_mag_B[band] == np.inf
+            fict_mag_B[band][boolean_mask_B] = 99.
 
         newdf_columns = ['RAdeg','DECdeg']+bands
         newdf = self.catdf[newdf_columns].copy()
         newdf['avg_intensity_A'] = avg_intensity_A
         newdf['avg_intensity_B'] = avg_intensity_B
         newdf['avg_V2'] = avg_V2
-        newdf['avg_V3'] = avg_V3        
+        newdf['avg_V3'] = avg_V3
+
         for band in bands:
             newdf[band+'_fict_mag_A'] = fict_mag_A[band]
             newdf[band+'_fict_mag_B'] = fict_mag_B[band]
@@ -858,13 +662,16 @@ class observation():
         totmag_A = {}
         for band in bands:
             totmag_A[band] = -2.5*np.log10(np.sum(np.power(10,-0.4*newdf[band+'_fict_mag_A'].values)))
+
         totcts_A = []
         for i, (zp_vega, gb) in enumerate(zip(zp_vega_all_A,ground_bands)):
             totcts_A.append(10**((zp_vega-totmag_A[gb])/2.5) * tot_exp_dur[i])
 
         totmag_B = {}
+
         for band in bands:
             totmag_B[band] = -2.5*np.log10(np.sum(np.power(10,-0.4*newdf[band+'_fict_mag_B'].values)))
+
         totcts_B = []
         for i, (zp_vega, gb) in enumerate(zip(zp_vega_all_B,ground_bands)):
             totcts_B.append(10**((zp_vega-totmag_B[gb])/2.5) * tot_exp_dur[i])
@@ -898,10 +705,10 @@ class observation():
                     INcol = IN_one[:,0,k]
 
                 sz = (35./(2.5+self.catdf[self.catargs['band']]))**2.
-                BM = sz >300
-                sz[BM] =300
-                BM = sz <5
-                sz[BM] =5
+                boolean_mask = sz >300
+                sz[boolean_mask] =300
+                boolean_mask = sz <5
+                sz[boolean_mask] =5
 
                 ax.scatter(V2_one[:,k],V3_one[:,k],c=INcol,s=sz)
                 ax.set_xlim(3.25,-3.25)
@@ -911,14 +718,13 @@ class observation():
                 ax.legend()
                 ax.set_title('Expnum: {}'.format(k+1))
 
-            f.suptitle('Obsid: {}'.format(self.obsid))
+            f.suptitle('observation_id: {}'.format(self.observation_id))
             f.tight_layout()
-        
+
             if savefilenames[0] is not None:
                 f.savefig(savefilenames[0])
-        
 
-###ADD PID and exptime to plot
+###ADD program_id and exptime to plot
 
         if draw_summary:
             f,ax = plt.subplots(1,1,figsize=(8.5,4))
@@ -966,10 +772,10 @@ class observation():
                 fict_mag_draw = newdf[self.catargs['band']+'_fict_mag_B']
 
             sz = (35./(-15+fict_mag_draw))**2.
-            BM = sz >300
-            sz[BM] =300
-            BM = sz< 5
-            sz[BM] = 5 
+            boolean_mask = sz >300
+            sz[boolean_mask] =300
+            boolean_mask = sz< 5
+            sz[boolean_mask] = 5 
 
             ax.scatter(avg_V2,avg_V3,c=INcol,s=sz)
             ax.set_xlim(3.25,-3.25)
@@ -977,7 +783,7 @@ class observation():
             ax.set_xlabel('V2')
             ax.set_ylabel('V3')
             ax.legend(loc=2,facecolor='lightgray',edgecolor='darkgray',framealpha=0.5,fontsize=10,ncol=2)
- #           ax.set_title('Averaged over the {}-th exp. spec.'.format(self.nestable_obs['order_number'].values[0]),fontsize=12)
+ #           ax.set_title('Averaged over the {}-th exp. spec.'.format(self.nes_table_obs['order_number'].values[0]),fontsize=12)
 
             stbox = dict(boxstyle="round",fc='lightgray',ec='darkgray',alpha=0.5)
  #           ax.text(3.1, 11.33,'{}+{}\n ZP$_{{Vega}}$={:5.2f}\n t$_{{ph.c.}} =$ {:.0f}s'.format(pupilshort,filtershort,zp_vega,tot_exp_dur), ha='left', fontsize=10,bbox=stbox)
@@ -1009,139 +815,42 @@ class observation():
                     annotation+=string.strip()
                 ax.text(3.1, 7.0, annotation, ha='left', fontsize=10,bbox=stbox)
             
-            f.suptitle('PID: {}, Obsid: {}, PA:{:6.2f}'.format(self.program,self.obsid,att))
+            f.suptitle('program_id: {}, observation_id: {}, PA:{:6.2f}'.format(self.program,self.observation_id,att))
             f.tight_layout()
         
             if savefilenames[1] is not None:
                 f.savefig(savefilenames[1])
 
-        
         return report_dict
-        
-        
-    def plot_observations_checks(self,nrows=2,ncols=3,verbose=True,filtershort=None):
-    
-        '''
-        Method to plot some summary results after running self.check_observations.
-        It plots the claws-unaffected angles for each exposure and a summary of
-        claws-unaffected angles over the whole observation
-        
-        Parameters
-        ----------
-        nrows, ncols: integers
-            number of rows and columns in the grid plot
-        '''
 
-        if filtershort is None:
-            filtershort = self.nestable_obs['filter_short'].values[0]
-
-        efs_here = [ef for ef in self.efs if ef.nestable_row['filter_short'].values[0] == filtershort]
-
-        #### The exposure-level plots
-        f1,axs = plt.subplots(nrows,ncols,figsize=(4*ncols,3.5*nrows))
-        for k,(ef,ax) in enumerate(zip(efs_here,axs.reshape(-1))):
-            ax.scatter(self.catdf['RAdeg'],self.catdf['DECdeg'],c='deeppink')
-            ax.scatter(self.target_ra,self.target_dec,marker='X',c='red')
-            ax.scatter(ef.raRef, ef.decRef,marker='X',c='orange')
-            ax.axis('equal')
-            ax.set_xlabel('RA')
-            ax.set_ylabel('Dec')
-            ax.invert_xaxis()
-            ax.set_title('Expnum: {}'.format(k+1))
-
-            for i,att in enumerate(self.attitudes):
-                if self.good_angles[i,k] == True:
-                    ef.define_attitude(att)
-                    for SR in self.SRlist:
-                        SR_RA,SR_DEC = rotations.tel_to_sky(ef.attitude, 3600*SR.V2V3path.vertices.T[0],3600*SR.V2V3path.vertices.T[1])
-                        SR_RAdeg,SR_DECdeg = SR_RA.value*180./np.pi,SR_DEC.value*180./np.pi
-                        RADEC_path = Path(np.array([SR_RAdeg,SR_DECdeg]).T,SR.V2V3path.codes)
-                        RADEC_patch = patches.PathPatch(RADEC_path,  lw=2,alpha=0.05)
-                        ax.add_patch(RADEC_patch)
-
-            draw_angstep = self.angstep
-            for s,e in zip(self.V3PA_validranges_starts[k],self.V3PA_validranges_ends[k]):
-                wd = patches.Wedge((ef.raRef, ef.decRef), 5.5, 90-e-0.5*draw_angstep, 90-s+0.5*draw_angstep,width=.5)
-                wd.set(color='darkseagreen')
-
-                ls = compute_line(ef.raRef, ef.decRef,90-s+0.5*draw_angstep,5.75)
-                le = compute_line(ef.raRef, ef.decRef,90-e-0.5*draw_angstep,5.75)
-                lm = compute_line(ef.raRef, ef.decRef,90-0.5*(s+e),7.)
-
-                ax.add_artist(wd)
-                ax.plot(ls[0],ls[1],color='darkseagreen')
-                ax.plot(le[0],le[1],color='darkseagreen')
-                ax.text(lm[0][1],lm[1][1], '{}-{}'.format(s,e), fontsize=10,horizontalalignment='center',verticalalignment='center')
-
-            ax.set_title('Expnum: {}'.format(k+1))
-        f1.suptitle('Obsid: {}'.format(self.obsid))
-        f1.tight_layout()
-
-        #### The observation-level plots
-        f2,ax2 = plt.subplots(1,1,figsize=(6,6))
-        ax2.scatter(self.catdf['RAdeg'],self.catdf['DECdeg'],c='deeppink')
-        ax2.scatter(self.target_ra,self.target_dec,marker='X',c='red')
-        ax2.axis('equal')
-        ax2.set_xlabel('RA')
-        ax2.set_ylabel('Dec')
-        ax2.invert_xaxis()
-
-        draw_angstep = self.angstep
-        if verbose == True:
-            print('*** Valid ranges ****')
-        
-        for s,e in zip(self.V3PA_validranges_obs_starts,self.V3PA_validranges_obs_ends):
-            wd = patches.Wedge((self.target_ra,self.target_dec), 5.5, 90-e-0.5*draw_angstep, 90-s+0.5*draw_angstep,width=.5)
-            wd.set(color='darkseagreen')
-
-            ls = compute_line(self.target_ra,self.target_dec,90-s+0.5*draw_angstep,5.75)
-            le = compute_line(self.target_ra,self.target_dec,90-e-0.5*draw_angstep,5.75)
-            lm = compute_line(self.target_ra,self.target_dec,90-0.5*(s+e),7.)
-
-            ax2.add_artist(wd)
-            ax2.plot(ls[0],ls[1],color='darkseagreen')
-            ax2.plot(le[0],le[1],color='darkseagreen')
-            ax2.text(lm[0][1],lm[1][1], '{}-{}'.format(s,e), fontsize=10,horizontalalignment='center',verticalalignment='center')
-            
-            if verbose == True:
-                print('PA Start -- PA End: {} -- {}'.format(s,e))
-
-
-        ax2.set_title('Summary for obsid {}'.format(self.obsid))
-        f2.tight_layout()
-        
-        return f1,f2
-
-#### Write a method to predict the intensity of a claw based on Scott R. intensity map and
-#### on the star's magnitude and exp time
 
 class exposure_frame():
     '''
     The main class to handle pointing info and rotation for an individual exposure
     '''
 
-    def __init__(self,exptable_row,siaf,nestable_row):
+    def __init__(self,exposure_table_row,siaf,nes_table_row):
     
         '''
         Parameters
         ----------
-        exptable_row: single row in a Pandas dataframe
+        exposure_table_row: single row in a Pandas dataframe
             contains the pointing info on this specific exposures
             
         siaf: instance of pysiaf.Siaf
             used to extract the info on the aperture used in this exposure
             
-        nestable_row: single row in a Pandas dataframe
+        nes_table_row: single row in a Pandas dataframe
             contains info on the expsoure specification from which the exposure
              in question is generated
         '''
 
-        self.exptable_row = exptable_row
-        self.nestable_row = nestable_row
-        self.V2Ref = siaf[self.exptable_row['AperName']].V2Ref
-        self.V3Ref = siaf[self.exptable_row['AperName']].V3Ref
-        self.raRef = np.float_(self.exptable_row['ra_center_rotation'])
-        self.decRef = np.float_(self.exptable_row['dec_center_rotation'])
+        self.exposure_table_row = exposure_table_row
+        self.nes_table_row = nes_table_row
+        self.V2Ref = siaf[self.exposure_table_row['AperName']].V2Ref
+        self.V3Ref = siaf[self.exposure_table_row['AperName']].V3Ref
+        self.raRef = np.float_(self.exposure_table_row['ra_center_rotation'])
+        self.decRef = np.float_(self.exposure_table_row['dec_center_rotation'])
 
     def define_attitude(self,v3pa):
         '''
@@ -1173,64 +882,9 @@ class exposure_frame():
         return v2rads.value*180./np.pi,v3rads.value*180./np.pi
 
 
-'''
-Function to put together a "query by criteria" SIMBAD query 
-and return an astropy Table with the results.
-Query criteria here are a circle radius and a faint magnitude limit
-based on a user-selectable bandpass
-'''
-
-def querysimbad(ra,dec,rad=1,band='K',maxmag=6.,simbad_timeout=200):
-
-    Simbad.TIMEOUT = simbad_timeout
-    Simbad.reset_votable_fields()
-    
-    for filtername in ['J','H','K']:
-        for prop in ['','_bibcode','_error','_name','_qual','_system','_unit','data']:
-            field = 'flux{}({})'.format(prop,filtername)
-            Simbad.add_votable_fields(field)
-    
-    if ra >=0.:
-        ras = '+'
-    else:
-        ras = '-'
-    if dec >=0.:
-        decs = '+'
-    else:
-        decs = '-'
-    
-    crit = 'region(circle, ICRS, {}{} {}{},{}d) & ({}mag < {})'.format(ras,ra,decs,dec,rad,band,maxmag)
-    print(crit)
-    t = Simbad.query_criteria(crit)
-    return t
-
-
-'''
-Function to obtain the (v1_ra,v1_dec,v3_pa) of a visit.
-If a header is passed, it will get the info from it, 
-if the visit_id is passed, it will query the PPSDB visit_execution table to obtain the same info
-'''
-def get_pointing_info(header=None, visit_id=None):
-    
-    if (header is not None) and (visit_id is not None):
-        print('Cannot specify both a header and a visit_id')
-        assert False
-
-    if header is not None:
-        return header['RA_V1'],header['DEC_V1'],header['PA_V3']
-
-    if visit_id is not None:
-        pass
-        # Need to write ppsdb query but need to set up the env correctly firs
-
-
-    
-## Add an option for the small SR
-
-
-'''Convenience class that creates a matplotlib.Path with the Rogue Path
-susceptibility zone vertices for a given NIRCam module'''
-class sus_reg():
+class SusceptibilityZoneVertices():
+    '''Convenience class that creates a matplotlib.Path with the Rogue Path
+       susceptibility zone vertices for a given NIRCam module'''
 
     def __init__(self,module='A',small=False):
         self.small = small
@@ -1268,7 +922,7 @@ class sus_reg():
         return Path(verts, codes)
 
 
-class rogue_path_intensity():
+class RoguePathIntensity():
     '''
     Use the FITS files provided by Scott Rohrbach to get the intensity of the
     susceptibility zone at a given V2,V3
@@ -1299,33 +953,22 @@ class rogue_path_intensity():
                 
     def get_intensity(self,V2,V3):
     
-#        x = (V2-self.fh['AAXISMAX'])/(self.fh['AAXISMIN']-self.fh['AAXISMAX'])*self.fh['NAXIS1']
         x = (V2-self.fh['AAXISMIN'])/(self.fh['AAXISMAX']-self.fh['AAXISMIN'])*self.fh['NAXIS1']
         y = (V3-self.fh['BAXISMIN'])/(self.fh['BAXISMAX']-self.fh['BAXISMIN'])*self.fh['NAXIS2']
         
         xint = np.floor(x).astype(np.int_)
         yint = np.floor(y).astype(np.int_)
         
-        BM1 = xint<0
-        BM2 = yint<0
-        BM3 = xint>=self.fh['NAXIS1']
-        BM4 = yint>=self.fh['NAXIS2']
-        BM = BM1|BM2|BM3|BM4
+        boolean_mask1 = xint<0
+        boolean_mask2 = yint<0
+        boolean_mask3 = xint>=self.fh['NAXIS1']
+        boolean_mask4 = yint>=self.fh['NAXIS2']
+        boolean_mask = boolean_mask1|boolean_mask2|boolean_mask3|boolean_mask4
 
-        xint[BM] = 0
-        yint[BM] = 0
+        xint[boolean_mask] = 0
+        yint[boolean_mask] = 0
         
         return(self.fd[yint,xint])
-        
-
-def compute_line(startx,starty,angle,length):
-
-    anglerad = np.pi/180.*angle
-    endx = startx + length*np.cos(anglerad)
-    endy = starty + length*np.sin(anglerad)
-
-    return np.array([startx,endx]), np.array([starty,endy])
-
 
 class zero_point_calc():
 
@@ -1342,83 +985,8 @@ class zero_point_calc():
 
     def get_avg_quantity(self,pupilshort,filtershort,quantity='PHOTMJSR'):
 
-        BM = self.zp_table['pupil+filter'] == '{}+{}'.format(pupilshort,filtershort)
-        return np.mean(self.zp_table.loc[BM,quantity])
-
-class emp_zero_point():
-
-    '''
-    Get an empirical zp given the module and the PUPIL+FILTER combo
-    '''
-    
-    def __init__(self):
-    
-        self.zp_A = {'CLEAR+F070W': 7.,
-                     'CLEAR+F090W': 8.,
-                     'CLEAR+F182M': 9.7436,
-                     'CLEAR+F187N': 7.2,
-                     'CLEAR+F140M':9.,
-                     'F162M+F150W2':7.5,
-                     'CLEAR+F212N': 8.1523,
-                     'CLEAR+F210M': 9.5981,
-                     'F164N+F150W2': 5.5,
-                     'CLEAR+F115W': 9.3934,
-                     'CLEAR+F150W': 10.2889,
-                     'CLEAR+F150W2': 10.88-0.37-0.1-0.0058,
-                     'CLEAR+F200W': 10.8321} 
-
-        self.zp_B = {'CLEAR+F070W': 8,
-                     'CLEAR+F090W': 10.8491,
-                     'CLEAR+F182M': 10.9,
-                     'CLEAR+F187N': 8.3,
-                     'CLEAR+F140M':9.5,
-                     'F162M+F150W2':8.5,
-                     'CLEAR+F212N': 8.2,
-                     'CLEAR+F210M': 10.7,
-                     'F164N+F150W2': 6.5,
-                     'CLEAR+F115W': 9.8801,
-                     'CLEAR+F150W': 11.8580,
-                     'CLEAR+F150W2': 12.5890,
-                     'CLEAR+F200W': 12.0125} 
-
-        self.match2MASS = {'CLEAR+F070W': 'j_m',
-                           'CLEAR+F090W': 'j_m',
-                           'CLEAR+F182M': 'h_m',
-                           'CLEAR+F187N': 'h_m',
-                           'CLEAR+F115W': 'h_m',
-                           'CLEAR+F140M': 'h_m',
-                           'F162M+F150W2': 'h_m',
-                           'CLEAR+F150W': 'h_m',
-                           'CLEAR+F150W2': 'h_m',
-                           'F164N+F150W2': 'h_m',
-                           'CLEAR+F200W': 'k_m',
-                           'CLEAR+F212N': 'k_m',
-                           'CLEAR+F210M': 'k_m'}
-
-        self.matchSIMBAD = {'CLEAR+F090W': 'I',
-                            'CLEAR+F090W': 'J',
-                            'CLEAR+F182M': 'H',
-                            'CLEAR+F187N': 'H',
-                            'CLEAR+F140M': 'H',
-                            'F162M+F150W2': 'H',
-                            'CLEAR+F115W': 'H',
-                            'CLEAR+F150W': 'H',
-                            'CLEAR+F150W2': 'H',
-                            'F164N+F150W2': 'H',
-                            'CLEAR+F200W': 'K',
-                            'CLEAR+F212N': 'K',
-                            'CLEAR+F210M': 'K'}
-
-
-    def get_emp_zp(self,module,pupilshort,filtershort):
-
-        if module == 'A':
-            return self.zp_A['{}+{}'.format(pupilshort,filtershort)]
-        elif module == 'B':
-            return self.zp_B['{}+{}'.format(pupilshort,filtershort)]
-        else:
-            print('Wrong module value', module)
-            assert False
+        boolean_mask = self.zp_table['pupil+filter'] == '{}+{}'.format(pupilshort,filtershort)
+        return np.mean(self.zp_table.loc[boolean_mask,quantity])
 
     '''
     This method returns the 2MASS/Simbad band to be associated with each SW NIRCam band
@@ -1430,20 +998,3 @@ class emp_zero_point():
             return self.match2MASS['{}+{}'.format(pupilshort,filtershort)]
         elif catalog == 'SIMBAD':
             return self.matchSIMBAD['{}+{}'.format(pupilshort,filtershort)]
-
-class filter_info():
-    '''
-    Get info on filter wavelengths and bandpass
-    '''    
-
-    def __init__(self, filename= os.path.join(DATA_PATH, 'Filter_info.txt')):
-
-        self.filter_table = pd.read_csv(filename,sep='\s+')
-
-    def get_info(self,pupilshort,filtershort,key_info='Pivot'):
-        if pupilshort == 'CLEAR':
-            check_value = filtershort
-        else:
-            check_value = pupilshort
-        BM = self.filter_table['Filter'] == check_value
-        return self.filter_table.loc[BM,key_info].values[0]
