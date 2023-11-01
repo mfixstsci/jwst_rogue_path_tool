@@ -1,6 +1,9 @@
 import json
 import os
 
+from astroquery.simbad import Simbad
+
+
 __location__ = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 
 def get_config():
@@ -31,7 +34,7 @@ def get_config():
 
     return settings
 
-def querysimbad(ra,dec,rad=1,band='K',maxmag=6.,simbad_timeout=200):
+def querysimbad(ra, dec, rad=1, band='K', maxmag=6., simbad_timeout=200):
     """ Function to put together a "query by criteria" SIMBAD query 
     and return an astropy Table with the results.
     Query criteria here are a circle radius and a faint magnitude limit
@@ -45,17 +48,18 @@ def querysimbad(ra,dec,rad=1,band='K',maxmag=6.,simbad_timeout=200):
         for prop in ['','_bibcode','_error','_name','_qual','_system','_unit','data']:
             field = 'flux{}({})'.format(prop,filtername)
             Simbad.add_votable_fields(field)
-    
+
     if ra >=0.:
-        ras = '+'
+        ra_symbol = '+'
     else:
-        ras = '-'
+        ra_symbol = '-'
+
     if dec >=0.:
-        decs = '+'
+        dec_symbol = '+'
     else:
-        decs = '-'
+        dec_symbol = '-'
     
-    crit = 'region(circle, ICRS, {}{} {}{},{}d) & ({}mag < {})'.format(ras,ra,decs,dec,rad,band,maxmag)
+    crit = 'region(circle, ICRS, {}{} {}{},{}d) & ({}mag < {})'.format(ras, ra, decs, dec, rad, band, maxmag)
     print(crit)
     t = Simbad.query_criteria(crit)
     return t

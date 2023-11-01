@@ -9,7 +9,6 @@ Authors
 
 import os
 
-from astroquery.simbad import Simbad
 import pysiaf
 from pysiaf.utils import rotations
 from jwst_backgrounds import jbt
@@ -184,26 +183,27 @@ class AptProgram():
                                 modules, catalog_args, self.siaf, smallregion=small_region)
 
     def add_observations(self, observation_ids=None, 
-                         catargs={'inner_rad':8.,'outer_rad':12.,'sourcecat':'SIMBAD',
-                                  'band':'K','maxmag':4.,'simbad_timeout':200,'verbose':True},
-                         smallregion=False):
+                         catalog_args={'inner_rad':8.,'outer_rad':12.,'sourcecat':'SIMBAD',
+                                       'band':'K','maxmag':4.,'simbad_timeout':200,'verbose':True},
+                         small_region=False):
 
         '''
         Configure multiple observations and append them to the self.observations list
         
         Parameters
         ----------
-        observation_id: list of Pandas indexes
+        observation_ids: list of Pandas indexes
             IDs of the observations to add. If None, all the opbservations in the prgram
             will be added
 
-        catargs: dictionary
+        catalog_args: dictionary
             parameters to be passed to the get_catalog method of an observation object
         '''
 
         if observation_ids is None:
             observation_ids = self.exposure_table['observation'].unique()
 
+        # TODO might be able to rewrite loop structure with pandas method or something?
         for observation_id in observation_ids:
             added = False
 
@@ -214,11 +214,12 @@ class AptProgram():
                     break
 
             if added == False:
-                obshere = self.configure_observation(observation_id,catargs,smallregion=smallregion)
-                if obshere is not None:
-                    self.observations.append(obshere)
+                observation_exists = self.configure_observation(observation_id, catalog_args, 
+                                                                small_region=small_region)
+                if observation_exists is not None:
+                    self.observations.append(observation_exists)
 
-    def check_observations(self,observation_ids=None,angstep=0.5,RP_padding=0):
+    def check_observations(self, observation_ids=None, angular_step=0.5, rogue_path_padding=0):
     
         '''
         Convenience function to check multiple observations for stars in the 
@@ -230,21 +231,22 @@ class AptProgram():
             IDs of the observations to check. If None, all the opbservations in the prgram
             will be added
 
-        angstep: float
+        angular_step: float
             The resolution at which to scan the whole (0,360) range of PAs, in degrees
             
-        RP_padding: float
-            Extra padding around the susceptibility region (stars outside the nominal
-            SR, but within RP_padding are flagged as "inside")
+        rogue_path_padding: float
+            Extra padding around the susceptibility region (SR) (stars outside the nominal
+            SR, but within rogue_path_padding are flagged as "inside")
         '''
     
         if observation_ids is None:
             observation_ids = self.exposure_table['observation'].unique()
+
         for observation_id in observation_ids:
             for obs in self.observations:
                 if obs.observation_id == observation_id:
-                    print('Checking observation_id:',observation_id)
-                    obs.check_multiple_angles(angstep,RP_padding=0.)
+                    print('Checking observation_id:', observation_id)
+                    obs.check_multiple_angles(angular_step, rogue_path_padding=0.)
 
 
 
@@ -258,7 +260,8 @@ class Observation():
     '''
 
 
-    def __init__(self,exposure_table_obs,nes_table_obs,visit_table_obs,target_ra,target_dec,modules,catargs,siaf,smallregion=False):
+    def __init__(self, exposure_table_obs, nes_table_obs, visit_table_obs, 
+                 target_ra, target_dec, modules, catargs, siaf, smallregion=False):
 
         '''
         Parameters
@@ -287,7 +290,9 @@ class Observation():
         siaf: pysiaf.Siaf instance
             object containing the apertures info for NIRCam
         '''
-        
+
+        # TODO Make this more pythonic, use args, kwargs?
+
         self.exposure_table_obs = exposure_table_obs
         self.nes_table_obs = nes_table_obs
         self.observation_id = self.exposure_table_obs.iloc[0]['observation']
@@ -301,52 +306,61 @@ class Observation():
         self.efs = self.get_exposure_frames(siaf)
         self.catdf = self.get_catalog()
 
-    def get_SRlist(self):
+    def get_susceptibility_region_list(self, susceptibility_region):
         '''
         Parameters
         ----------
-        None
-        
+        susceptibility_region
+
         Returns
-        ----------
-        SRlist: list of matplotlib.Path objects
-            The list of susceptibility regions corresponding to the module used in this observation
-        '''    
+        -------
+        susceptibility_region_list: list
+            The list of matplotlib.Path objects for susceptibility regions corresponding to the module 
+            used in this observation
+        
+        susceptibility_region_names: list
+            A description of this variable
+        '''
+
+        # TODO ask Mario about this method, there was a potential bug (unknown variable name)
+        # method not called anywhere else inside of this module.
 
         if (self.modules == 'ALL') | (self.modules == 'BOTH'):
-            SRlist = [sus_reg(module='A',small=self.smallregion),sus_reg(module='B',small=self.smallregion)]
-            SRnames = ['A','B']
+            susceptibility_region_list = [susceptibility_region(module='A', small=self.smallregion), 
+                                          susceptibility_region(module='B', small=self.smallregion)]
+            susceptibility_region_names = ['A','B']
         else:
             if self.modules[0] == 'A':
-                SRlist = [sus_reg(module='A',small=self.smallregion)]
-                SRnames = ['A']
+                susceptibility_region_list = [susceptibility_region(module='A', small=self.smallregion)]
+                susceptibility_region_names = ['A']
             elif self.modules[0] == 'B':
-                SRlist = [sus_reg(module='B',small=self.smallregion)]
-                SRnames = ['B']
+                susceptibility_region_list = [susceptibility_region(module='B', small=self.smallregion)]
+                susceptibility_region_names = ['B']
 
-        return SRlist,SRnames
+        return susceptibility_region_list, susceptibility_region_names
 
-    def get_exposure_frames(self,siaf):
+    def get_exposure_frames(self, siaf):
         '''
         Parameters
         ----------
-        siaf:
-            a pysiaf.Siaf instance
+        siaf: pysiaf.Siaf
+            science instrument aperture file 
         
         Returns
         ----------
-        efs: list of exposure_frame objects
+        exposure_frames: list of exposure_frame objects
             The list of objects containing pointing info for each exposure within this observation
         '''    
 
 
-        efs = []
-        for i,row in self.exposure_table_obs.iterrows():
-        
+        exposure_frames = []
+        for i, row in self.exposure_table_obs.iterrows():
             boolean_mask = (self.nes_table_obs['visit'] == row['visit']) & \
-                 (self.nes_table_obs['order_number'] == row['exposure_spec_order_number'])
-            efs.append(exposure_frame(row,siaf,self.nes_table_obs.loc[boolean_mask]))
-        return efs
+                           (self.nes_table_obs['order_number'] == row['exposure_spec_order_number'])
+            exposure_frames.append(exposure_frame(row, siaf, 
+                                                  self.nes_table_obs.loc[boolean_mask]))
+
+        return exposure_frames
 
     def get_catalog(self):
         '''
@@ -369,7 +383,7 @@ class Observation():
         max_ra_diff = np.abs(ra_cen_sorted[-1]-ra_cen_sorted[0])
         max_dec_diff = np.abs(dec_cen_sorted[-1]-dec_cen_sorted[0])
 
-        max_delta = np.sqrt(np.sum(np.square([max_ra_diff,max_dec_diff])))
+        max_delta = np.sqrt(np.sum(np.square([max_ra_diff, max_dec_diff])))
         
         inner_rad = self.catargs['inner_rad'] - max_delta
         outer_rad = self.catargs['outer_rad'] + max_delta
@@ -380,33 +394,35 @@ class Observation():
         # Retrieve a catalog
         if self.catargs['sourcecat'] == 'SIMBAD':
             df_in  = querysimbad(self.target_ra,self.target_dec,rad=inner_rad,
-                                 band=self.catargs['band'],maxmag=self.catargs['maxmag'],simbad_timeout=self.catargs['simbad_timeout']).to_pandas()
+                                 band=self.catargs['band'],maxmag=self.catargs['maxmag'],
+                                 simbad_timeout=self.catargs['simbad_timeout']).to_pandas()
             df_out = querysimbad(self.target_ra,self.target_dec,rad=outer_rad,
-                                 band=self.catargs['band'],maxmag=self.catargs['maxmag'],simbad_timeout=self.catargs['simbad_timeout']).to_pandas()
+                                 band=self.catargs['band'],maxmag=self.catargs['maxmag'],
+                                 simbad_timeout=self.catargs['simbad_timeout']).to_pandas()
 
             df = pd.concat([df_in, df_out]).drop_duplicates(keep=False)
+
             for i, row in df.iterrows():
                 coord = SkyCoord(row['RA'], row['DEC'],unit=(u.hourangle, u.deg))
                 df.loc[i,'RAdeg'] = coord.ra.deg
                 df.loc[i,'DECdeg'] = coord.dec.deg
-                
+
         if self.catargs['sourcecat'] == '2MASS':
             df = pd.read_csv(self.catargs['2MASS_filename'])
             boolean_mask = df[self.catargs['band']] < self.catargs['maxmag']
             df = df[boolean_mask]
-            
+
             c1 = SkyCoord(self.target_ra*u.deg, self.target_dec*u.deg, frame='icrs')
             c2 = SkyCoord(df['ra'].values*u.deg, df['dec'].values*u.deg, frame='icrs')
             sep = c1.separation(c2)
             boolean_mask = (sep.deg < outer_rad) & (sep.deg > inner_rad)
-            
+
             df=df[boolean_mask]
             df.rename(columns={'ra': 'RAdeg', 'dec': 'DECdeg'},inplace=True)
-            
-        
+
         return df
 
-    def check_multiple_angles(self,angstep,filtershort=None,RP_padding=0.):
+    def check_multiple_angles(self, angular_step, filter_short=None, rogue_path_padding=0.):
 
         '''
         Convenience method to check multiple angles at once, for all
@@ -414,40 +430,41 @@ class Observation():
         
         Parameters
         ----------
-        angstep: float
+        angular_step: float
             The resolution at which to scan the whole (0,360) range of PAs, in degrees
 
-        filtershort: string
+        filter_short: string
             name of the filter in use, will be used to downselect the exposures.
             if None will be defaulted to the first filter in the nircam_expsoures_specification
             table
 
-        RP_padding: float
-            Extra padding around the susceptibility region (stars outside the nominal
-            SR, but within RP_padding are flagged as "inside")
+        rogue_path_padding: float
+            Extra padding around the susceptibility region (SR) (stars outside the nominal
+            SR, but within rogue_path_padding are flagged as "inside")
         '''
 
-        if filtershort is None:
-            filtershort = self.nes_table_obs['filter_short'].values[0]
+        if filter_short is None:
+            filter_short = self.nes_table_obs['filter_short'].values[0]
 
-        efs_here = [ef for ef in self.efs if ef.nes_table_row['filter_short'].values[0] == filtershort]
+        efs_here = [ef for ef in self.efs if ef.nes_table_row['filter_short'].values[0] == filter_short]
 
-        self.angstep = angstep
-        self.RP_padding = RP_padding
-        self.attitudes = np.arange(0.,360.,angstep)
+        self.angstep = angular_step
+        self.RP_padding = rogue_path_padding
+        self.attitudes = np.arange(0.,360.,angular_step)
         self.IN = np.empty([len(self.catdf),self.attitudes.size,len(self.SRlist),len(efs_here)],dtype=np.bool_)
         self.V2 = np.empty([len(self.catdf),self.attitudes.size,len(efs_here)])
         self.V3 = np.empty([len(self.catdf),self.attitudes.size,len(efs_here)])
         self.good_angles = np.zeros([self.attitudes.size,len(efs_here)],dtype=np.bool_)
 
-        for i,att in enumerate(self.attitudes):
-            IN_one, V2_one, V3_one, check_one = self.check_one_angle(att,filtershort,RP_padding=self.RP_padding)
+        for i, attitude in enumerate(self.attitudes):
+            IN_one, V2_one, V3_one, check_one = self.check_one_angle(attitude, filter_short, 
+                                                                     rogue_path_padding=self.RP_padding)
             self.V2[:,i,:],self.V3[:,i,:] = V2_one,V3_one
             self.IN[:,i,:,:] = IN_one
             self.good_angles[i,:] = check_one
             
-        V3PA_validranges_starts= []
-        V3PA_validranges_ends  = []
+        V3PA_valid_ranges_starts= []
+        V3PA_valid_ranges_ends  = []
 
         for k in range(len(efs_here)):
             change = np.where(self.good_angles[:-1,k] != self.good_angles[1:,k])[0]
@@ -457,35 +474,34 @@ class Observation():
                 if self.good_angles[change[0],k]:
                     change = np.roll(change,1)
         
-                V3PA_validranges_starts.append(self.angstep*change[::2])
-                V3PA_validranges_ends.append(self.angstep*change[1::2])
+                V3PA_valid_ranges_starts.append(self.angstep*change[::2])
+                V3PA_valid_ranges_ends.append(self.angstep*change[1::2])
         else:
-             V3PA_validranges_starts.append(None)
-             V3PA_validranges_ends.append(None)
+             V3PA_valid_ranges_starts.append(None)
+             V3PA_valid_ranges_ends.append(None)
 
         self.good_angles_obs = np.all(self.good_angles,axis=1)
 
-        V3PA_validranges_obs_starts= []
-        V3PA_validranges_obs_ends  = []
+        V3PA_valid_ranges_obs_starts= []
+        V3PA_valid_ranges_obs_ends  = []
         
         change = np.where(self.good_angles_obs[:-1] != self.good_angles_obs[1:])[0]
         if change.size >0:
             if self.good_angles_obs[change[0]]:
                 change = np.roll(change,1)
         
-            V3PA_validranges_obs_starts = self.angstep*change[::2]
-            V3PA_validranges_obs_ends = self.angstep*change[1::2]
+            V3PA_valid_ranges_obs_starts = self.angstep*change[::2]
+            V3PA_valid_ranges_obs_ends = self.angstep*change[1::2]
         else:
-            V3PA_validranges_obs_starts = None
-            V3PA_validranges_obs_ends = None
-        
-        
-        self.V3PA_validranges_starts = V3PA_validranges_starts
-        self.V3PA_validranges_ends = V3PA_validranges_ends
-        self.V3PA_validranges_obs_starts = V3PA_validranges_obs_starts
-        self.V3PA_validranges_obs_ends = V3PA_validranges_obs_ends
+            V3PA_valid_ranges_obs_starts = None
+            V3PA_valid_ranges_obs_ends = None
 
-    def check_one_angle(self,att,filtershort,RP_padding=0.):
+        self.V3PA_validranges_starts = V3PA_valid_ranges_starts
+        self.V3PA_validranges_ends = V3PA_valid_ranges_ends
+        self.V3PA_validranges_obs_starts = V3PA_valid_ranges_obs_starts
+        self.V3PA_validranges_obs_ends = V3PA_valid_ranges_obs_ends
+
+    def check_one_angle(self, attitude, filter_short, rogue_path_padding=0.):
 
         '''
         Method to check for the presence of stars in the susceptibility
@@ -493,13 +509,13 @@ class Observation():
         
         Parameters
         ----------
-        att: float
+        attitude: float
             position angle to check, in degrees
             
-        filtershort: string
+        filter_short: string
             name of the filter in use, will be used to downselect the exposures
             
-        RP_padding: float
+        rogue_path_padding: float
             Extra padding around the susceptibility region (stars outside the nominal
             SR, but within RP_padding are flagged as "inside")
             
@@ -513,19 +529,20 @@ class Observation():
             True if any star is in either SRs for a given exposure
         '''
 
-        efs_here = [ef for ef in self.efs if ef.nes_table_row['filter_short'].values[0] == filtershort]
+        efs_here = [ef for ef in self.efs if ef.nes_table_row['filter_short'].values[0] == filter_short]
 
-        IN_one = np.empty([len(self.catdf),len(self.SRlist),len(efs_here)],dtype=np.bool_)
-        V2_one = np.empty([len(self.catdf),len(efs_here)])
-        V3_one = np.empty([len(self.catdf),len(efs_here)])
-        check_one = np.zeros(len(efs_here),dtype=np.bool_)
+        IN_one = np.empty([len(self.catdf), len(self.SRlist), len(efs_here)], dtype=np.bool_)
+        V2_one = np.empty([len(self.catdf), len(efs_here)])
+        V3_one = np.empty([len(self.catdf), len(efs_here)])
+        check_one = np.zeros(len(efs_here), dtype=np.bool_)
 
-        for k,ef in enumerate(efs_here):
-            ef.define_attitude(att)
+        for k, ef in enumerate(efs_here):
+            ef.define_attitude(attitude)
             V2_one[:,k],V3_one[:,k] = ef.V2V3_at_one_attitude(self.catdf['RAdeg'],self.catdf['DECdeg'])
  
             for j,SR in enumerate(self.SRlist):
-                IN_one[:,j,k] = SR.V2V3path.contains_points(np.array([V2_one[:,k],V3_one[:,k]]).T,radius=RP_padding)
+                IN_one[:,j,k] = SR.V2V3path.contains_points(np.array([V2_one[:,k],V3_one[:,k]]).T, 
+                                                            radius=rogue_path_padding)
             if len(self.SRlist) > 1:
                 if ~(np.any(IN_one[:,0,k]) | np.any(IN_one[:,1,k])):
                     check_one[k] =  True
@@ -535,7 +552,9 @@ class Observation():
  
         return IN_one, V2_one, V3_one, check_one
 
-    def fixed_angle(self,att,RP_padding=0.,smooth=None,draw_allexp=True,draw_summary=True,nrows=2,ncols=3,savefilenames=[None,None],metainfo=None):
+    def fixed_angle(self, att, RP_padding=0., smooth=None, draw_allexp=True,
+                    draw_summary=True, nrows=2, ncols=3, savefilenames=[None,None],
+                    metainfo=None):
     
         '''
         Method to check a single angle and return diagnistic plot and info.
@@ -829,7 +848,7 @@ class exposure_frame():
     The main class to handle pointing info and rotation for an individual exposure
     '''
 
-    def __init__(self,exposure_table_row,siaf,nes_table_row):
+    def __init__(self, exposure_table_row, siaf, nes_table_row):
     
         '''
         Parameters
@@ -842,7 +861,7 @@ class exposure_frame():
             
         nes_table_row: single row in a Pandas dataframe
             contains info on the expsoure specification from which the exposure
-             in question is generated
+            in question is generated
         '''
 
         self.exposure_table_row = exposure_table_row
@@ -929,7 +948,6 @@ class RoguePathIntensity():
     '''
     
     def __init__(self,module='A',smooth=None):
-    
         self.module=module
         if self.module == 'A':
             filename = 'Rogue path NCA.fits'
@@ -948,11 +966,8 @@ class RoguePathIntensity():
         self.fd[:,245:] = 0.
         self.fd[:85,:] = 0.
         self.fd[160:,:] = 0.
-        
-        
-                
+
     def get_intensity(self,V2,V3):
-    
         x = (V2-self.fh['AAXISMIN'])/(self.fh['AAXISMAX']-self.fh['AAXISMIN'])*self.fh['NAXIS1']
         y = (V3-self.fh['BAXISMIN'])/(self.fh['BAXISMAX']-self.fh['BAXISMIN'])*self.fh['NAXIS2']
         
@@ -971,29 +986,24 @@ class RoguePathIntensity():
         return(self.fd[yint,xint])
 
 class zero_point_calc():
-
     '''
     Get the average quantities (eg zp_vega og PHOTMJSR) over SCAs for a PUPIL+FILTER combo
     '''
     
-    def __init__(self,filename=os.path.join(DATA_PATH, 'NRC_ZPs_0995pmap.txt')):
-
+    def __init__(self, filename=os.path.join(DATA_PATH, 'NRC_ZPs_0995pmap.txt')):
         df = pd.read_csv(filename,skiprows=4,sep='|',names= [y.strip() for y in 'dum | pupil+filter |      sca | PHOTMJSR | zp_vega |  vega_Jy | zp_AB | mean_pix_sr | dum2'.split('|')])
-        df.drop(columns=['dum','dum2'],inplace=True)
+        df.drop(columns=['dum','dum2'], inplace=True)
         df['pupil+filter'] = df['pupil+filter'].map(str.strip)
-        self.zp_table=df
+        self.zp_table = df
 
     def get_avg_quantity(self,pupilshort,filtershort,quantity='PHOTMJSR'):
-
-        boolean_mask = self.zp_table['pupil+filter'] == '{}+{}'.format(pupilshort,filtershort)
+        boolean_mask = self.zp_table['pupil+filter'] == '{}+{}'.format(pupilshort, filtershort)
         return np.mean(self.zp_table.loc[boolean_mask,quantity])
 
-    '''
-    This method returns the 2MASS/Simbad band to be associated with each SW NIRCam band
-    to find the appropriate magnitude values for estimating counts
-    '''
-    
-    def get_ground_band(self,pupilshort,filtershort,catalog='2MASS'):
+    def get_ground_band(self, pupilshort, filtershort, catalog='2MASS'):
+        '''This method returns the 2MASS/Simbad band to be associated with each SW NIRCam band
+        to find the appropriate magnitude values for estimating counts
+        '''
         if catalog == '2MASS':
             return self.match2MASS['{}+{}'.format(pupilshort,filtershort)]
         elif catalog == 'SIMBAD':
