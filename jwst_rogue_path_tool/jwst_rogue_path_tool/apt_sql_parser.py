@@ -1,16 +1,13 @@
 #!/usr/bin/env python
 
-import csv
 from astropy.table import Table
 
 
 class AptSqlFile:
-    """An sql file exported by APT.
-    """
+    """An sql file exported by APT."""
 
     def __init__(self, sqlfile):
-        """Read data from sql file. Get list of tables names.
-        """
+        """Read data from sql file. Get list of tables names."""
         self.__sqlfile = sqlfile
         self.__sql = self.read_sql_file()
         self.tablenames = self.get_table_names()
@@ -37,9 +34,9 @@ class AptSqlFile:
     def build_aptsql_metadata_table(self, rows, keys):
         """Build an astropy table with sql metadata and column names.
 
-        >>> rows = AptSqlFile.rows_from_sql(tablename)
-        >>> keys = AptSqlFile.get_keys(rows)
-        >>> AptSqlFile.cols_from_rows(rows, keys)
+        >>> rows = AptSqlFile.get_aptsql_metadata(tablename)
+        >>> keys = AptSqlFile.get_aptsql_table_column_names(rows)
+        >>> AptSqlFile.build_aptsql_metadata_table(rows, keys)
 
         Returns
         -------
@@ -52,33 +49,34 @@ class AptSqlFile:
             col = list()
 
             for row in rows:
-                col.append(row.get(key, ''))
-            
+                col.append(row.get(key, ""))
+
             try:
                 col = [int(x) for x in col]
             except ValueError:
                 try:
                     col = [float(x) for x in col]
                 except ValueError:
-                    col = [x[1:-1] if x.startswith("'") and x.endswith("'") \
-                            else x for x in col]
+                    col = [
+                        x[1:-1] if x.startswith("'") and x.endswith("'") else x
+                        for x in col
+                    ]
 
             table[key] = col
 
         return table
 
     def get_aptsql_metadata(self, tablename):
-        """Return a list of dictionaries with key/value pairs scraped from sql file.
-        """
-        prefix = 'insert into ' + tablename + ' '
+        """Return a list of dictionaries with key/value pairs scraped from sql file."""
+        prefix = "insert into " + tablename + " "
         rows = list()
 
         for line in self.__sql:
-            if line[:len(prefix)] == prefix:
-                keyval_str = line[len(prefix):].strip()
-                keystr, valstr = keyval_str.split('values')
-                keys = [k.strip() for k in keystr[2:-2].split(',')]
-                vals = [v.strip() for v in valstr[2:-2].split(',')]
+            if line[: len(prefix)] == prefix:
+                keyval_str = line[len(prefix) :].strip()
+                keystr, valstr = keyval_str.split("values")
+                keys = [k.strip() for k in keystr[2:-2].split(",")]
+                vals = [v.strip() for v in valstr[2:-2].split(",")]
                 keyval_dict = dict(zip(keys, vals))
                 rows.append(keyval_dict)
 
@@ -93,7 +91,7 @@ class AptSqlFile:
         Returns
         -------
         keys: list-like
-            A comprehensive list of key names from rows object 
+            A comprehensive list of key names from rows object
         """
         keys = set()
 
@@ -105,26 +103,24 @@ class AptSqlFile:
         return keys
 
     def get_table_names(self):
-        """Parse sql insert statements to determine table names.
-        """
-        prefix = 'insert into '
+        """Parse sql insert statements to determine table names."""
+        prefix = "insert into "
         names = list()
 
         for line in self.__sql:
-            if line[:len(prefix)] == prefix:
-                names.append(line[len(prefix):line.find('(')].strip())
+            if line[: len(prefix)] == prefix:
+                names.append(line[len(prefix) : line.find("(")].strip())
 
         names = sorted(list(set(names)))
-        names.remove('#AOK values')
+        names.remove("#AOK values")
 
         return names
 
     def read_sql_file(self):
-        """Read sql file exported by APT. Strip trailing newlines.
-        """
+        """Read sql file exported by APT. Strip trailing newlines."""
         sql = list()
 
-        with open(self.__sqlfile, 'r') as f:
+        with open(self.__sqlfile, "r") as f:
             for line in f:
                 sql.append(line.rstrip())
 
@@ -137,7 +133,7 @@ class AptSqlFile:
         out = table.copy(copy_data=False)
 
         for key in out.keys():
-            newkey = key.replace('_', ' ')
+            newkey = key.replace("_", " ")
             if newkey != key:
                 out.rename_column(key, newkey)
 
