@@ -4,21 +4,35 @@ import matplotlib.pyplot as plt
 import numpy as np
 from pysiaf.utils import rotations
 
-from jwst_rogue_path_tool.jwst_rogue_path_tool.utils import compute_line
 
+def compute_line(startx, starty, angle, length):
+    anglerad = np.pi / 180.0 * angle
+    endx = startx + length * np.cos(anglerad)
+    endy = starty + length * np.sin(anglerad)
+
+    return np.array([startx, endx]), np.array([starty, endy])
 
 def plot_observations_checks(
     observation, nrows=2, ncols=3, verbose=True, filtershort=None
 ):
     """
-    Method to plot some summary results after running observation.check_observations.
+    Plot some summary results after running observation.check_observations.
     It plots the claws-unaffected angles for each exposure and a summary of
     claws-unaffected angles over the whole observation
 
     Parameters
     ----------
-    nrows, ncols: integers
-        number of rows and columns in the grid plot
+    observation : class
+        Observation class
+
+    nrows : integer
+        Number of rows in subplot (default=2)
+
+    ncols : integer
+        Number of columns in subplot (default=3)
+
+    filtershort : str
+        Name of the short wavelength filter
     """
 
     if filtershort is None:
@@ -30,8 +44,9 @@ def plot_observations_checks(
         if ef.nes_table_row["filter_short"].values[0] == filtershort
     ]
 
-    #### The exposure-level plots
+    # Exposure-level plots
     f1, axs = plt.subplots(nrows, ncols, figsize=(4 * ncols, 3.5 * nrows))
+
     for k, (ef, ax) in enumerate(zip(efs_here, axs.reshape(-1))):
         ax.scatter(
             observation.catdf["RAdeg"], observation.catdf["DECdeg"], c="deeppink"
@@ -96,7 +111,7 @@ def plot_observations_checks(
     f1.suptitle("Obsid: {}".format(observation.observation_id))
     f1.tight_layout()
 
-    #### The observation-level plots
+    # Observation-level plots
     f2, ax2 = plt.subplots(1, 1, figsize=(6, 6))
     ax2.scatter(observation.catdf["RAdeg"], observation.catdf["DECdeg"], c="deeppink")
     ax2.scatter(observation.target_ra, observation.target_dec, marker="X", c="red")
