@@ -1,0 +1,54 @@
+[project]
+name = "jwst_rogue_path_tool"
+description = "Placeholer"
+readme = "README.md"
+authors = [
+  { name = "Mario Gennaro" },
+  { name = "Mees Fix" },
+]
+keywords = ["astronomy", "python"]
+classifiers = ["Programming Language :: Python"]
+requires-python = ">=3.9"
+dependencies = [
+    "astropy>=5.3.1",
+    "astroquery>=0.4.6",
+    "jupyter>=1.0.0",
+    "matplotlib>=3.7.2",
+    "numpy>=1.25.1",
+    "pandas>=2.0.3",
+    "pip>=23.1.2",
+]
+
+dynamic = ["version"]
+
+[project.optional-dependencies]
+test = [
+  "pytest",
+  "pytest-cov",
+]  
+docs = [
+  "sphinx",
+  "sphinx_rtd_theme",
+  "stsci_rtd_theme",
+]
+
+[project.license]
+file = "LICENSE"
+content-type = "text/plain"
+
+[build-system]
+requires = ["setuptools >= 61.2",
+            "setuptools_scm[toml]>=7.1"]
+build-backend = 'setuptools.build_meta'
+
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+namespaces = false
+
+[tool.setuptools_scm]
+
+[tool.pytest]
+junit_family = "xunit2"

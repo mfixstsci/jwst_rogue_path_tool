@@ -1,0 +1,19 @@
+name: jwst-rogue-path
+
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  - astropy>=5.3.1
+  - astroquery>=0.4.6
+  - jupyter>=1.0.0
+  - matplotlib>=3.7.2
+  - numpy>=1.25.1  
+  - pandas>=2.0.3
+  - pip>=23.1.2
+  - python>=3.9.1
+
+  - pip:
+    - jwst-backgrounds>=1.2.0
+    - pysiaf>=0.20.0
