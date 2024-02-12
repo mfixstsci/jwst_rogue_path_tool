@@ -21,7 +21,7 @@ class AptProgram:
     given observation and for multiple observations of a given program
     """
 
-    def __init__(self, sqlfile, instrument="NIRCAM"):
+    def __init__(self, sqlfile, instrument="NIRCAM", usr_defined_obs=None):
         """
         Parameters
         ----------
@@ -30,6 +30,9 @@ class AptProgram:
 
         instrument : str
             JWST Instrument name
+
+        usr_defined_obs : list like
+            List of specific oberservations to load from program
         """
 
         self.__sql = AptSqlFile(sqlfile)
@@ -37,13 +40,15 @@ class AptProgram:
         if "fixed_target" not in self.__sql.tablenames:
             raise Exception("JWST Rogue Path Tool only supports fixed targets")
 
+        self.usr_defined_obs = usr_defined_obs
+
         self.assign_catalog()
         self.get_target_information()
         self.__build_observations()
         self.__build_exposures()
 
     def __build_observations(self):
-        self.observations = Observations(self.__sql)
+        self.observations = Observations(self.__sql, self.usr_defined_obs)
 
     def __build_exposures(self):
         """Add exposure classes to APT Program"""
@@ -62,7 +67,11 @@ class AptProgram:
         catalog_names = {"2mass": "two_mass_kmag_lt_5.csv", "simbad": ""}
 
         if catalog_name not in catalog_names.keys():
-            raise Exception("AVAILABLE CATALOG NAMES ARE '2mass' and 'simbad' {} NOT AVAILABLE".format(catalog_name))
+            raise Exception(
+                "AVAILABLE CATALOG NAMES ARE '2mass' and 'simbad' {} NOT AVAILABLE".format(
+                    catalog_name
+                )
+            )
 
         self.catalog_name = catalog_name
         selected_catalog = catalog_names[self.catalog_name]
@@ -80,72 +89,84 @@ class AptProgram:
         self.dec = target_info["dec_computed"]
 
     def sweep_angles(self, observation_id, attitudes):
+        """Sweep supplied attitude angle(s) to determine if exposures contain "bright"
+        targets in suseptibility region.
+
+        Parameters
+        ----------
+        observation_id : int
+            APT Observation identifier
+
+        attitudes : list-like
+            List of attitude values to sweep through.
+        """
+
         ra, dec = self.catalog["ra"], self.catalog["dec"]
-        for exposure in self.exposure_frames[observation_id]:
-            exposure_table = self.observations.program_data[observation_id]["exposures"]
-            template_table = self.observations.program_data[observation_id][
-                "nircam_templates"
-            ]
 
-            exposure_visit = exposure_table["visit"][exposure]
-            exposure_module = template_table.loc[
-                template_table["visit"] == exposure_visit
-            ]["modules"].values[0]
+        # Merge tables on visits to obtain module per exposure.
+        exposure_table = self.observations.program_data[observation_id]["exposures"]
+        template_table = self.observations.program_data[observation_id][
+            "nircam_templates"
+        ]
 
-            if exposure_module == "ALL" or exposure_module == "BOTH":
-                sus_reg = {}
+        merged = exposure_table.merge(template_table[["visit", "modules"]]).set_index(
+            exposure_table.index
+        )
+
+        for index, row in merged.iterrows():
+            sus_reg ={}
+            if row["modules"] == "ALL" or row["modules"] == "BOTH":
                 sus_reg["A"] = SusceptibilityRegion(module="A")
                 sus_reg["B"] = SusceptibilityRegion(module="B")
-            else:
-                sus_reg = SusceptibilityRegion(module=exposure_module)
+            elif row["modules"] == 'A':
+                sus_reg["A"] = SusceptibilityRegion(module=row["modules"])
+            elif row["modules"] == 'B':
+                sus_reg["B"] = SusceptibilityRegion(module=row["modules"])
 
             attitudes_swept = collections.defaultdict(dict)
 
             print(
                 "Sweeping angles {} --> {} for Observation: {} and Exposure: {}".format(
-                    min(attitudes), max(attitudes), observation_id, exposure
+                    min(attitudes), max(attitudes), observation_id, index
                 )
             )
 
+            # Loop through all of the attitude angles to determine if catalog targets
+            # are in the the suseptibility region.
             for angle in tqdm(attitudes):
                 v2, v3 = self.exposure_frames[observation_id][
-                    exposure
+                    index
                 ].V2V3_at_one_attitude(ra, dec, angle)
 
-                if isinstance(sus_reg, dict):
-                    in_one_a = sus_reg["A"].V2V3path.contains_points(
-                        np.array([v2, v3]).T, radius=0.0
-                    )
+                # If sus_reg is dictionary, both instrument modules were used,
+                # we need to check both modules for catalog targets.
 
-                    in_one_b = sus_reg["B"].V2V3path.contains_points(
-                        np.array([v2, v3]).T, radius=0.0
-                    )
+                # Else only one module was used, only check there.
 
-                    if np.any(in_one_a) | np.any(in_one_b):
-                        attitudes_swept[angle]["targets_in"] = True
-                        attitudes_swept[angle]["targets_loc"] = [in_one_a, in_one_b]
-                    else:
-                        attitudes_swept[angle]["targets_in"] = False
-                        attitudes_swept[angle]["targets_loc"] = [in_one_a, in_one_b]
-                else:
-                    in_one = sus_reg.V2V3path.contains_points(
-                        np.array([v2, v3]).T, radius=0.0
-                    )
+                # NOTE when both modules are used, `target_in` is a two dimensional
+                # list. [module_a, module_b] and is a one dimensional for single modules
 
+                attitudes_swept[angle]["targets_in"] = []
+                attitudes_swept[angle]["targets_loc"] = []
+
+                for key in sus_reg.keys():
+                    in_one = sus_reg[key].V2V3path.contains_points(
+                        np.array([v2, v3]).T, radius=0.0)
+                    
                     if np.any(in_one):
-                        attitudes_swept[angle]["targets_in"] = True
-                        attitudes_swept[angle]["targets_loc"] = in_one
+                        attitudes_swept[angle]["targets_in"].append(True)
+                        attitudes_swept[angle]["targets_loc"].append(in_one)
                     else:
-                        attitudes_swept[angle]["targets_in"] = False
-                        attitudes_swept[angle]["targets_loc"] = in_one
+                        attitudes_swept[angle]["targets_in"].append(False)
+                        attitudes_swept[angle]["targets_loc"].append(in_one)
 
-            self.exposure_frames[observation_id][exposure].sweeps = attitudes_swept
+            self.exposure_frames[observation_id][index].sweeps = attitudes_swept
 
 
 class Observations:
-    def __init__(self, apt_sql):
+    def __init__(self, apt_sql, usr_defined_obs=None):
         self.__sql = apt_sql
-        self.program_data_by_observation()
+        self.program_data_by_observation(usr_defined_obs)
         self.observation_number_list = self.program_data.keys()
         self.drop_unsupported_observations()
 
@@ -199,7 +220,7 @@ class Observations:
         for observation_id in self.unusable_observations:
             self.supported_observations.pop(observation_id)
 
-    def program_data_by_observation(self):
+    def program_data_by_observation(self, specific_observations=None):
         """Class method to organize APT data by obsevation id
 
         Parameters
@@ -220,10 +241,25 @@ class Observations:
         ]:
             df = self.__sql.build_aptsql_dataframe(table)
 
+            unique_obs = df["observation"].unique()
+
             if table == "exposures":
                 df = df.loc[df["apt_label"] != "BASE"]
 
-            for observation_id in df["observation"].unique():
+            if specific_observations:
+                for obs in specific_observations:
+                    if obs not in unique_obs:
+                        raise Exception(("User defined observation: '{}' not available! "
+                                         "Available observations are: {}".format(obs, unique_obs)))
+                    else:
+                        continue
+
+            if specific_observations:
+                observations_list = specific_observations
+            else:
+                observations_list = unique_obs
+
+            for observation_id in observations_list:
                 df_by_program_id = df.loc[df["observation"] == observation_id]
                 program_data_by_observation_id[observation_id][table] = df_by_program_id
 
