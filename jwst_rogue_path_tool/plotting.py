@@ -1,35 +1,71 @@
+from matplotlib.patches import Wedge
 import matplotlib.pyplot as plt
+import numpy as np
 
-def plot_exposure_level(exposures, catalog):
-    total_num_plots = len(exposures)
+from jwst_rogue_path_tool.utils import get_consecutive_valid_angles, get_intersecting_angles
 
-    columns = 3
-    rows = total_num_plots // columns
 
-    if total_num_plots % columns != 0:
-        rows += 1
-    
-    position = range(1, total_num_plots + 1)
+def create_exposure_plots(program, ncols=3):
+    """Generate exposure level plots
+    """
 
-    fig = plt.figure(1)
-    
-    stars_in_sus_reg = []
-    for exposure, plot_position in zip(exposures, range(total_num_plots)):
-      for angle in exposure.sweeps:
-        if True in exposure.sweeps[angle]['targets_in']:
-            
-      # add every single subplot to the figure with a for loop
-      ax = fig.add_subplot(rows, columns, position[plot_position])
-      ax.scatter(catalog['ra'], catalog['dec'])
+    for obs_id in program.observation_exposure_combos:
+         # Dynamically calculate number of rows based on ncols
+         nrows = len(program.observation_exposure_combos[obs_id]) // ncols + (len(program.observation_exposure_combos[1]) % ncols > 0)
 
+         for n, exp_num in enumerate(program.observation_exposure_combos[obs_id]):
+             program.exposure_frames[obs_id][exp_num].get_valid_angles()
+             valid_angles = program.exposure_frames[obs_id][exp_num].valid_angles[0]
+             consecutive_angles = get_consecutive_valid_angles(valid_angles)
+
+             ax = plt.subplot(nrows, ncols, n + 1)
+             ax.set_xlabel('RA [Degrees]')
+             ax.set_ylabel('DEC [Degrees]')
+             ax.set_title('Observation {}, Exposure: {}'.format(obs_id, exp_num))
+             ax.scatter(program.ra, program.dec, marker='X', c='red')
+             ax.scatter(program.plotting_catalog['ra'],
+                        program.plotting_catalog['dec'], c='deeppink')
+
+             for angles in consecutive_angles:
+                 min_theta = min(angles)
+                 max_theta = max(angles)
+                 w = Wedge((program.ra, program.dec), 7, min_theta, max_theta, 
+                           fill=False, color='darkseagreen')
+                 ax.add_artist(w)
+
+         plt.tight_layout()
+         plt.show()
+
+
+def create_observation_plot(program, obs_id):
+    """Plot that describe all valid angles at the observation level
+    """
+
+    obs_level_valid_angles = []
+
+    for exp_num in program.exposure_frames[obs_id]:
+        program.exposure_frames[obs_id][exp_num].get_valid_angles()
+        valid_angles = program.exposure_frames[obs_id][exp_num].valid_angles
+        obs_level_valid_angles.append(valid_angles)
+
+        intersecting_angles = get_intersecting_angles(obs_level_valid_angles)
+
+    obs_level_consecutive_angles = get_consecutive_valid_angles(intersecting_angles)
+
+    ax = plt.subplot()
+    ax.set_xlabel('RA [Degrees]')
+    ax.set_ylabel('DEC [Degrees]')
+    ax.set_title('Observation Level Plot')
+    ax.scatter(program.ra, program.dec, marker='X', c='red')
+    ax.scatter(program.plotting_catalog['ra'],
+            program.plotting_catalog['dec'], c='deeppink')
+
+    for angles in obs_level_consecutive_angles:
+        min_theta = min(angles)
+        max_theta = max(angles)
+        w = Wedge((program.ra, program.dec), 7, min_theta, max_theta, 
+                fill=False, color='darkseagreen')
+        ax.add_artist(w)
+
+    plt.tight_layout()
     plt.show()
-
-for obs_id in program.exposure_frames:
-    for exposure in program.exposure_frames[obs_id]:
-        for angle in program.exposure_frames[obs_id][exposure].sweeps:
-            if False in program.exposure_frames[1][1].sweeps[angle]['targets_in']:
-                 for i, index in enumerate(program.exposure_frames[1][1].sweeps[angle]['targets_in']):
-                     if index is True:
-                         print(program.catalog.iloc[program.exposure_frames[1][1].sweeps[angle]['targets_loc'][i]])
-                     else:
-                         print('There are no stars in sus reg')

@@ -2,6 +2,8 @@ import collections
 from copy import deepcopy
 import os
 
+import astropy.units as u
+from astropy.coordinates import SkyCoord
 from matplotlib.path import Path
 import numpy as np
 import pandas as pd
@@ -10,6 +12,7 @@ from pysiaf.utils import rotations
 from tqdm import tqdm
 
 from jwst_rogue_path_tool.apt_sql_parser import AptSqlFile
+from jwst_rogue_path_tool.utils import get_consecutive_valid_angles
 
 
 class AptProgram:
@@ -41,6 +44,7 @@ class AptProgram:
             raise Exception("JWST Rogue Path Tool only supports fixed targets")
 
         self.usr_defined_obs = usr_defined_obs
+        self.observation_exposure_combos = collections.defaultdict(list)
 
         self.assign_catalog()
         self.get_target_information()
@@ -61,6 +65,8 @@ class AptProgram:
                     "exposures"
                 ].iterrows():
                     self.exposure_frames[observation_id][index] = ExposureFrame(row)
+                    # Make list of observation/exposure combos for looping later
+                    self.observation_exposure_combos[observation_id].append(index)
 
     def assign_catalog(self, catalog_name="2mass"):
         """Assign Catalog"""
@@ -80,13 +86,28 @@ class AptProgram:
 
         self.catalog = pd.read_csv(full_catalog_path)
 
+    def locate_targets_in_annulus(self, inner_radius=8.0, outer_radius=12.0):
+        """Calculate the targets from a catalog that fall within inner and outer radii.
+        """
+
+        # Set coordinates for target and catalog
+        target_coordinates = SkyCoord(self.ra*u.deg, self.dec*u.deg, frame='icrs')
+        catalog_coordinates = SkyCoord(self.catalog['ra'].values*u.deg, self.catalog['dec'].values*u.deg, frame='icrs')
+        
+        # Calculate separation from target to all targets in catalog
+        separation = target_coordinates.separation(catalog_coordinates)
+        mask = (separation.deg < outer_radius) & (separation.deg > inner_radius)
+
+        # Retrieve all targets in masked region above.
+        self.plotting_catalog = self.catalog[mask]
+
     def get_target_information(self):
         """obtain target information based on observation"""
 
         target_info = self.__sql.build_aptsql_dataframe("fixed_target")
 
-        self.ra = target_info["ra_computed"]
-        self.dec = target_info["dec_computed"]
+        self.ra = target_info["ra_computed"][0]
+        self.dec = target_info["dec_computed"][0]
 
     def sweep_angles(self, observation_id, attitudes):
         """Sweep supplied attitude angle(s) to determine if exposures contain "bright"
@@ -314,6 +335,18 @@ class ExposureFrame:
 
         for identifier in self.__exposure_identifiers:
             print("{}: ".format(identifier), self.exposure_data[identifier])
+
+    def get_valid_angles(self):
+        """Collect valid angles
+        """         
+        # Build array of all targets_in values.
+        targets_in = np.array([self.sweeps.get(angle, {}).get('targets_in') for angle in self.sweeps.keys()])
+        # Index location in array contains False
+        valid_angles_loc = np.any(~targets_in, axis=1)
+        # Transform indices into 
+        self.valid_angles = np.where(valid_angles_loc)
+        self.valid_angle_data = [self.sweeps[angle] for angle in self.valid_angles[0]]
+        self.consecutive_angles = get_consecutive_valid_angles(self.valid_angles)
 
     def V2V3_at_one_attitude(self, ra_degrees, dec_degrees, v3pa, verbose=False):
         """
