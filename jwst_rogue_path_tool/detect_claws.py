@@ -182,6 +182,7 @@ class AptProgram:
                         attitudes_swept[angle]["targets_loc"].append(in_one)
 
             self.exposure_frames[observation_id][index].sweeps = attitudes_swept
+            self.exposure_frames[observation_id][index].sus_reg = sus_reg
 
 
 class Observations:
