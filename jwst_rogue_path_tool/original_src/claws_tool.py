@@ -898,14 +898,16 @@ class observation():
 
         totmag_A = {}
         for band in bands:
-            totmag_A[band] = -2.5*np.log10(np.sum(np.power(10,-0.4*newdf[band+'_fict_mag_A'].values)))
+            BM = ~pd.isnull(newdf[band+'_fict_mag_A'])
+            totmag_A[band] = -2.5*np.log10(np.sum(np.power(10,-0.4*newdf.loc[BM,band+'_fict_mag_A'].values)))
         totcts_A = []
         for i, (zp_vega, gb) in enumerate(zip(zp_vega_all_A,ground_bands)):
             totcts_A.append(10**((zp_vega-totmag_A[gb])/2.5) * tot_exp_dur[i])
 
         totmag_B = {}
         for band in bands:
-            totmag_B[band] = -2.5*np.log10(np.sum(np.power(10,-0.4*newdf[band+'_fict_mag_B'].values)))
+            BM = ~pd.isnull(newdf[band+'_fict_mag_B'])
+            totmag_B[band] = -2.5*np.log10(np.sum(np.power(10,-0.4*newdf.loc[BM,band+'_fict_mag_B'].values)))
         totcts_B = []
         for i, (zp_vega, gb) in enumerate(zip(zp_vega_all_B,ground_bands)):
             totcts_B.append(10**((zp_vega-totmag_B[gb])/2.5) * tot_exp_dur[i])
@@ -998,8 +1000,17 @@ class observation():
             if len(self.SRlist) > 1:
                 IN_0 = IN_one[:,0,:]
                 IN_1 = IN_one[:,1,:]
+                
+                IN_both   = np.all(IN_0,axis=1) & np.all(IN_1,axis=1)
+                IN_0_only = np.all(IN_0,axis=1) & ~(np.all(IN_1,axis=1))
+                IN_1_only = np.all(IN_1,axis=1) & ~(np.all(IN_0,axis=1))
+                
                 INcol = np.all(IN_0,axis=1)|np.all(IN_1,axis=1)
-                fict_mag_draw = 0.5*(newdf[self.catargs['band']+'_fict_mag_A']+ newdf[self.catargs['band']+'_fict_mag_B'])
+                
+                fict_mag_draw = np.empty_like(newdf[self.catargs['band']+'_fict_mag_A'])
+                fict_mag_draw[IN_0_only] = newdf.loc[IN_0_only,self.catargs['band']+'_fict_mag_A']
+                fict_mag_draw[IN_1_only] = newdf.loc[IN_1_only,self.catargs['band']+'_fict_mag_B']
+                fict_mag_draw[IN_both] = 0.5*(newdf.loc[IN_both,self.catargs['band']+'_fict_mag_A']+ newdf.loc[IN_both,self.catargs['band']+'_fict_mag_B'])
                 
             else:
                 IN_0 = IN_one[:,0,:]
@@ -1161,7 +1172,7 @@ class exposure_frame():
     The main class to handle pointing info and rotation for an individual exposure
     '''
 
-    def __init__(self,exptable_row,siaf,nestable_row):
+    def __init__(self,exptable_row,target_ra,target_dec,siaf,nestable_row):
     
         '''
         Parameters
@@ -1179,12 +1190,13 @@ class exposure_frame():
 
         self.exptable_row = exptable_row
         self.nestable_row = nestable_row
-        self.V2Ref = siaf[self.exptable_row['AperName']].V2Ref
-        self.V3Ref = siaf[self.exptable_row['AperName']].V3Ref
-        self.raRef = np.float_(self.exptable_row['ra_center_rotation'])
-        self.decRef = np.float_(self.exptable_row['dec_center_rotation'])
+        self.V2target = np.float_(self.exptable_row['v2'])
+        self.V3target = np.float_(self.exptable_row['v3'])
+        self.ratarget = np.float_(target_ra)
+        self.dectarget = np.float_(target_dec)
+        
 
-    def define_attitude(self,v3pa):
+    def define_attitude(self,v3pa,usetarget=True):
         '''
         Define an attitude matrix (pysiaf.rotations)
 
@@ -1193,7 +1205,7 @@ class exposure_frame():
         v3pa:
             position angle of the v3 axis
         '''
-        self.attitude = rotations.attitude(self.V2Ref,self.V3Ref,self.raRef,self.decRef,v3pa)
+        self.attitude = rotations.attitude(self.V2target,self.V3target,self.ratarget,self.dectarget,v3pa)
     
     def V2V3_at_one_attitude(self,radeg,decdeg,verbose=False):
         '''
@@ -1416,11 +1428,11 @@ class emp_zero_point():
                      'F162M+F150W2':8.5,
                      'CLEAR+F212N': 8.2,
                      'CLEAR+F210M': 10.7,
-                     'F164N+F150W2': 6.5,
+                     'F164N+F150W2': 11.0419,
                      'CLEAR+F115W': 9.8801,
                      'CLEAR+F150W': 11.8580,
                      'CLEAR+F150W2': 12.5890,
-                     'CLEAR+F200W': 12.0125} 
+                     'CLEAR+F200W': 12.0125}  
 
         self.match2MASS = {'CLEAR+F070W': 'j_m',
                            'CLEAR+F090W': 'j_m',
