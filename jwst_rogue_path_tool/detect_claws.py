@@ -2,8 +2,6 @@ import collections
 from copy import deepcopy
 import os
 
-import astropy.units as u
-from astropy.coordinates import SkyCoord
 from matplotlib.path import Path
 import numpy as np
 import pandas as pd
@@ -11,7 +9,9 @@ from pysiaf.utils import rotations
 from tqdm import tqdm
 
 from jwst_rogue_path_tool.apt_sql_parser import AptSqlFile
-from jwst_rogue_path_tool.utils import get_consecutive_valid_angles
+from jwst_rogue_path_tool.utils import get_valid_angles_windows
+from jwst_rogue_path_tool.plotting import create_exposure_plots, create_observation_plot
+
 
 class AptProgram:
     """
@@ -43,198 +43,84 @@ class AptProgram:
         if "fixed_target" not in self.__sql.tablenames:
             raise Exception("JWST Rogue Path Tool only supports fixed targets")
 
-        self.angle_step = kwargs.get('angle_step', 1.0)
-        self.usr_defined_obs = kwargs.get('usr_defined_obs')
+        self.angular_step = kwargs.get("angular_step", 1.0)
+        self.usr_defined_obs = kwargs.get("usr_defined_obs")
         self.observation_exposure_combos = collections.defaultdict(list)
-        self.inner_radius = kwargs.get('inner_radius', 8.0)
-        self.outer_radius = kwargs.get('outer_radius', 12.0)
 
     def __build_observations(self):
-        """Convenience method to build observations
-        """
-        self.observations = Observations(self.__sql, self.usr_defined_obs)
+        """Convenience method to build observations"""
+        self.observations = Observations(
+            self.__sql, self.usr_defined_obs
+        )
 
-    def __build_exposures(self):
+    def __build_exposure_frames(self):
         """Add exposure classes to APT Program"""
-        self.exposure_frames = collections.defaultdict(dict)
         for observation_id in self.observations.observation_number_list:
             if observation_id in self.observations.unusable_observations:
                 continue
             else:
-                for index, row in self.observations.program_data[observation_id][
-                    "exposures"
-                ].iterrows():
-                    self.exposure_frames[observation_id][index] = ExposureFrame(row)
-                    # Make list of observation/exposure combos for looping later
-                    self.observation_exposure_combos[observation_id].append(index)
-
-    def assign_catalog(self, catalog_name="2mass"):
-        """Assign Catalog"""
-        catalog_names = {"2mass": "two_mass_kmag_lt_5.csv", "simbad": ""}
-
-        if catalog_name not in catalog_names.keys():
-            raise Exception(
-                "AVAILABLE CATALOG NAMES ARE '2mass' and 'simbad' {} NOT AVAILABLE".format(
-                    catalog_name
+                observation = self.observations.data[observation_id]
+                exposure_frames = ExposureFrames(observation, self.angular_step)
+                self.observations.data[observation_id]["exposure_frames"] = (
+                    exposure_frames
                 )
-            )
 
-        self.catalog_name = catalog_name
-        selected_catalog = catalog_names[self.catalog_name]
-        project_dirname = os.path.dirname(__file__)
-        full_catalog_path = os.path.join(project_dirname, "data", selected_catalog)
+    def plot_exposures(self, observation_id):
+        if observation_id not in self.observations.data.keys():
+            raise KeyError(f"{observation_id} IS NOT A VALID OBSERVATION ID")
+        else:
+            observation = self.observations.data[observation_id]
+            create_exposure_plots(observation, self.ra, self.dec)
 
-        self.catalog = pd.read_csv(full_catalog_path)
-
-    def locate_targets_in_annulus(self, inner_radius, outer_radius):
-        """Calculate the targets from a catalog that fall within inner and outer radii."""
-
-        # Set coordinates for target and catalog
-        target_coordinates = SkyCoord(self.ra * u.deg, self.dec * u.deg, frame="icrs")
-        catalog_coordinates = SkyCoord(
-            self.catalog["ra"].values * u.deg,
-            self.catalog["dec"].values * u.deg,
-            frame="icrs",
-        )
-
-        # Calculate separation from target to all targets in catalog
-        separation = target_coordinates.separation(catalog_coordinates)
-        mask = (separation.deg < outer_radius) & (separation.deg > inner_radius)
-
-        # Retrieve all targets in masked region above.
-        self.catalog_inner_radius = inner_radius
-        self.catalog_outer_radius = outer_radius
-        self.plotting_catalog = self.catalog[mask]
-
-    def __get_all_valid_angles(self):
-        for obs_id in self.observations.supported_observations:
-            for exp_num in self.exposure_frames[obs_id]:
-                self.exposure_frames[obs_id][exp_num].get_valid_angles(self.angle_step)
+    def plot_observation(self, observation_id):
+        if observation_id not in self.observations.data.keys():
+            raise KeyError(f"{observation_id} IS NOT A VALID OBSERVATION ID")
+        else:
+            observation = self.observations.data[observation_id]
+            create_observation_plot(observation, self.ra, self.dec)
 
     def get_target_information(self):
         """obtain target information based on observation"""
-
         target_info = self.__sql.build_aptsql_dataframe("fixed_target")
 
         self.ra = target_info["ra_computed"][0]
         self.dec = target_info["dec_computed"][0]
 
     def run(self):
-        '''Run code sequentially
-        '''
-        self.assign_catalog()
+        """Run code sequentially"""
         self.get_target_information()
         self.__build_observations()
-        self.__build_exposures()
-        self.__sweep_all_angles()
-        self.__get_all_valid_angles()
-        self.locate_targets_in_annulus(self.inner_radius, self.outer_radius)
+        self.__build_exposure_frames()
 
-    def __sweep_all_angles(self):
-        for obs_id in self.exposure_frames:
-            self.sweep_angles(obs_id, np.arange(0.0, 360.0, self.angle_step))
+    def write_report(self, filename, observation):
+        f = open(filename, "a")
+        exposure_frames = observation["exposure_frames"]
 
-    def sweep_angles(self, observation_id, attitudes):
-        """Sweep supplied attitude angle(s) to determine if exposures contain "bright"
-        targets in suseptibility region.
+        all_starting_angles = [exposure_frames.valid_starts_angles[exp_num] for exp_num in exposure_frames.data]
+        all_ending_angles = [exposure_frames.valid_ends_angles[exp_num] for exp_num in exposure_frames.data]
 
-        Parameters
-        ----------
-        observation_id : int
-            APT Observation identifier
+        all_starting_angles = np.unique(np.concatenate(all_starting_angles))
+        all_ending_angles = np.unique(np.concatenate(all_ending_angles))
 
-        attitudes : list-like
-            List of attitude values to sweep through.
-        """
+        obs_id = observation["visit"]["observation"][0]
 
-        ra, dec = self.catalog["ra"], self.catalog["dec"]
-
-        # Merge tables on visits to obtain module per exposure.
-        exposure_table = self.observations.program_data[observation_id]["exposures"]
-        template_table = self.observations.program_data[observation_id][
-            "nircam_templates"
-        ]
-
-        merged = exposure_table.merge(template_table[["visit", "modules"]]).set_index(
-            exposure_table.index
-        )
-
-        for index, row in merged.iterrows():
-            sus_reg = {}
-            if row["modules"] == "ALL" or row["modules"] == "BOTH":
-                sus_reg["A"] = SusceptibilityRegion(module="A")
-                sus_reg["B"] = SusceptibilityRegion(module="B")
-            elif row["modules"] == "A":
-                sus_reg["A"] = SusceptibilityRegion(module=row["modules"])
-            elif row["modules"] == "B":
-                sus_reg["B"] = SusceptibilityRegion(module=row["modules"])
-
-            attitudes_swept = collections.defaultdict(dict)
-
-            print(
-                "Sweeping angles {} --> {} for Observation: {} and Exposure: {}".format(
-                    min(attitudes), max(attitudes), observation_id, index
-                )
+        f.write(f"**** Valid Ranges for Observation {obs_id} ****\n")
+        for min_angle, max_angle in zip(all_starting_angles, all_ending_angles):
+            f.write(
+                f"PA Start -- PA End: {min_angle} -- {max_angle}\n"
             )
 
-            # Loop through all of the attitude angles to determine if catalog targets
-            # are in the the susceptibility region.
-            for angle in tqdm(attitudes):
-                v2, v3 = self.exposure_frames[observation_id][
-                    index
-                ].V2V3_at_one_attitude(ra, dec, angle)
+        # if no_valid_angle_exposures:
+        #     f.write(f"NO VALID ANGLES FOR EXPOSURES {no_valid_angle_exposures}\n")
 
-                # If sus_reg is dictionary, both instrument modules were used,
-                # we need to check both modules for catalog targets.
-
-                # Else only one module was used, only check there.
-
-                # NOTE when both modules are used, `target_in` is a two dimensional
-                # list. [module_a, module_b] and is a one dimensional for single modules
-
-                attitudes_swept[angle]["targets_in"] = []
-                attitudes_swept[angle]["targets_loc"] = []
-
-                for key in sus_reg.keys():
-                    in_one = sus_reg[key].V2V3path.contains_points(
-                        np.array([v2, v3]).T, radius=0.0
-                    )
-
-                    if np.any(in_one):
-                        attitudes_swept[angle]["targets_in"].append(True)
-                        attitudes_swept[angle]["targets_loc"].append(in_one)
-                    else:
-                        attitudes_swept[angle]["targets_in"].append(False)
-                        attitudes_swept[angle]["targets_loc"].append(in_one)
-
-            self.exposure_frames[observation_id][index].sweeps = attitudes_swept
-            self.exposure_frames[observation_id][index].sus_reg = sus_reg
-
-    def write_report(self, filename):
-        no_valid_angle_exposures = []
-        f = open(filename, "a")
-        for obs_id in self.exposure_frames:
-            f.write(f"**** Valid Ranges for Observation {obs_id} ****\n")
-            all_valid_angles = []
-            for exp_num in self.exposure_frames[obs_id]:
-                valid_angles = self.exposure_frames[obs_id][exp_num].valid_angles
-                if valid_angles:
-                    all_valid_angles.append(self.exposure_frames[obs_id][exp_num].consecutive_angles)
-                else:
-                    no_valid_angle_exposures.append(exp_num)
-                    continue
-            intersecting_angles = sorted(set(all_valid_angles[0]))
-            for min_angle, max_angle in intersecting_angles:
-                f.write(f"PA Start -- PA End: {min_angle} -- {max_angle} [step size: {self.angle_step}]\n")
-        if no_valid_angle_exposures:
-            f.write(f"NO VALID ANGLES FOR EXPOSURES {no_valid_angle_exposures}\n")
         f.close()
+
 
 class Observations:
     def __init__(self, apt_sql, usr_defined_obs=None):
         self.__sql = apt_sql
         self.program_data_by_observation(usr_defined_obs)
-        self.observation_number_list = self.program_data.keys()
+        self.observation_number_list = self.data.keys()
         self.drop_unsupported_observations()
 
     def drop_unsupported_observations(self):
@@ -246,9 +132,9 @@ class Observations:
         self.unusable_observations = []
 
         for observation_id in self.observation_number_list:
-            visit_table = self.program_data[observation_id]["visit"]
+            visit_table = self.data[observation_id]["visit"]
             templates = visit_table["template"]
-            exposure_table = self.program_data[observation_id]["exposures"]
+            exposure_table = self.data[observation_id]["exposures"]
 
             # If any visits have unsupported templates, this will locate them
             unsupported_templates = visit_table[~templates.isin(supported_templates)]
@@ -260,9 +146,7 @@ class Observations:
                 if "template_coord_parallel_1" in visit_table:
                     aperture_names = exposure_table["AperName"]
                     nrc_visits = aperture_names.str.contains("NRC")
-                    self.program_data[observation_id]["exposures"] = exposure_table[
-                        nrc_visits
-                    ]
+                    self.data[observation_id]["exposures"] = exposure_table[nrc_visits]
             elif "template_coord_parallel_1" in visit_table:
                 # If NRC is not the primary, check to see if NRC is the secondary.
                 parallel_templates = visit_table["template_coord_parallel_1"]
@@ -274,16 +158,14 @@ class Observations:
                     # associated with the primary instrument
                     aperture_names = exposure_table["AperName"]
                     nrc_visits = aperture_names.str.contains("NRC")
-                    self.program_data[observation_id]["exposures"] = exposure_table[
-                        nrc_visits
-                    ]
+                    self.data[observation_id]["exposures"] = exposure_table[nrc_visits]
                 else:
                     self.unusable_observations.append(observation_id)
             else:
                 self.unusable_observations.append(observation_id)
 
         # Create seperate data object with unusable observations removed.
-        self.supported_observations = deepcopy(self.program_data)
+        self.supported_observations = deepcopy(self.data)
         for observation_id in self.unusable_observations:
             self.supported_observations.pop(observation_id)
 
@@ -334,49 +216,167 @@ class Observations:
                 df_by_program_id = df.loc[df["observation"] == observation_id]
                 program_data_by_observation_id[observation_id][table] = df_by_program_id
 
-                program_data_by_observation_id[observation_id][
-                    "ra"
-                ] = target_information["ra_computed"].values[0]
+                program_data_by_observation_id[observation_id]["ra"] = (
+                    target_information["ra_computed"].values[0]
+                )
 
-                program_data_by_observation_id[observation_id][
-                    "dec"
-                ] = target_information["dec_computed"].values[0]
+                program_data_by_observation_id[observation_id]["dec"] = (
+                    target_information["dec_computed"].values[0]
+                )
 
-        self.program_data = program_data_by_observation_id
+        self.data = program_data_by_observation_id
 
 
-class ExposureFrame:
-    def __init__(self, exposure):
-        self.exposure_data = exposure
+class ExposureFrames:
+    def __init__(self, observation, angular_step):
+        self.assign_catalog()
+        self.observation = observation
+        self.angular_step = angular_step
+        self.observation_number = self.observation["visit"]["observation"][0]
+        self.exposure_table = self.observation["exposures"]
+        self.template_table = self.observation["nircam_templates"]
+        self.nrc_exposure_specification_table = self.observation[
+            "nircam_exposure_specification"
+        ]
+
+        self.module_by_exposure = self.exposure_table.merge(
+            self.template_table[["visit", "modules"]]
+        ).set_index(self.exposure_table.index)
+
+        self.exposure_frame_table = pd.merge(
+            self.module_by_exposure,
+            self.nrc_exposure_specification_table,
+            left_on=["exposure_spec_order_number"],
+            right_on=["order_number"],
+            how="left",
+        ).set_index(self.module_by_exposure.index)
+
+        self.build_exposure_frames_data()
+        self.check_in_susceptibility_region()
+        self.get_visibility_windows()
+
+    def assign_catalog(self, catalog_name="2mass"):
+        """Assign Catalog"""
+        catalog_names = {"2mass": "two_mass_kmag_lt_5.csv", "simbad": ""}
+
+        if catalog_name not in catalog_names.keys():
+            raise Exception(
+                "AVAILABLE CATALOG NAMES ARE '2mass' and 'simbad' {} NOT AVAILABLE".format(
+                    catalog_name
+                )
+            )
+
+        self.catalog_name = catalog_name
+        selected_catalog = catalog_names[self.catalog_name]
+        project_dirname = os.path.dirname(__file__)
+        full_catalog_path = os.path.join(project_dirname, "data", selected_catalog)
+
+        self.catalog = pd.read_csv(full_catalog_path)
+
+    def build_exposure_frames_data(self):
+        dither_pointings = self.exposure_frame_table.dither_point_index
+
+        self.data = {}
+
+        exposure_by_order_number = self.exposure_frame_table.set_index(
+            ["exposure", "order_number"]
+        )
+
+        for idx in dither_pointings:
+            self.data[idx] = exposure_by_order_number.loc[idx, :]
+
+    def get_susceptibility_region(self, exposure):
+        sus_reg = {}
+        if exposure["modules"] == "ALL" or exposure["modules"] == "BOTH":
+            sus_reg["A"] = SusceptibilityRegion(module="A")
+            sus_reg["B"] = SusceptibilityRegion(module="B")
+        elif exposure["modules"] == "A":
+            sus_reg["A"] = SusceptibilityRegion(module=exposure["modules"])
+        elif exposure["modules"] == "B":
+            sus_reg["B"] = SusceptibilityRegion(module=exposure["modules"])
+
+        return sus_reg
+
+    def get_visibility_windows(self):
+        self.valid_starts_indices = {}
+        self.valid_ends_indices = {}
+
+        self.valid_starts_angles = {}
+        self.valid_ends_angles = {}
+
+        for exp_num in self.swept_angles:
+            angles_bool = [
+                self.swept_angles[exp_num][angle]["targets_in"][0]
+                for angle in self.swept_angles[exp_num]
+            ]
+
+            change = np.where(angles_bool != np.roll(angles_bool, 1))[0]
+            if angles_bool[change[0]]:
+                change = np.roll(change, 1)
+            starts = change[::2]
+            ends = change[1::2]
+
+            self.valid_starts_indices[exp_num] = starts
+            self.valid_ends_indices[exp_num] = ends
+
+            self.valid_starts_angles[exp_num] = (starts - 0.5) * self.angular_step
+            self.valid_ends_angles[exp_num] = (ends - 0.5) * self.angular_step
 
     def calculate_attitude(self, v3pa):
         self.attitude = rotations.attitude(
-            self.exposure_data['v2'],
-            self.exposure_data['v3'],
+            self.exposure_data["v2"],
+            self.exposure_data["v3"],
             self.exposure_data["ra_center_rotation"],
             self.exposure_data["dec_center_rotation"],
             v3pa,
         )
 
-    def get_valid_angles(self, step):
-        """Collect valid angles"""
-        # Build array of all targets_in values.
-        targets_in = np.array(
-            [
-                self.sweeps.get(angle, {}).get("targets_in")
-                for angle in self.sweeps.keys()
-            ]
-        )
-        # Index location in array contains False
-        valid_angles_bool = np.all(~targets_in, axis=1)
-        # Get numerical array indices of angles that don't have targets in sus region
-        self.valid_angles_loc = np.where(valid_angles_bool)
-        # Index angles based on length of angles check
-        indexed_sweeps = dict(enumerate(self.sweeps.keys()))
-        # Based on index, get the angles that don't fall in sus region
-        self.valid_angles = [indexed_sweeps[idx] for idx in self.valid_angles_loc[0]]
-        # Get sets of consecutive angles based on step.
-        self.consecutive_angles = get_consecutive_valid_angles(self.valid_angles, step)
+    def check_in_susceptibility_region(self):
+        ra, dec = self.catalog["ra"], self.catalog["dec"]
+        self.swept_angles = {}
+
+        for idx in self.data:
+            self.dataframe = self.data[idx]
+            self.exposure_data = self.dataframe.loc[1]
+
+            susceptibility_region = self.get_susceptibility_region(self.exposure_data)
+            attitudes_swept = collections.defaultdict(dict)
+            attitudes = np.arange(0, 360, 1)
+
+            print(
+                "Sweeping angles {} --> {} for Observation: {} and Exposure: {}".format(
+                    min(attitudes), max(attitudes), self.observation_number, idx
+                )
+            )
+
+            # Loop through all of the attitude angles to determine if catalog targets
+            # are in the the susceptibility region.
+            for angle in tqdm(attitudes):
+                v2, v3 = self.V2V3_at_one_attitude(ra, dec, angle)
+
+                # If sus_reg is dictionary, both instrument modules were used,
+                # we need to check both modules for catalog targets.
+
+                # Else only one module was used, only check there.
+
+                # NOTE when both modules are used, `target_in` is a two dimensional
+                # list. [module_a, module_b] and is a one dimensional for single modules
+                attitudes_swept[angle]["targets_in"] = []
+                attitudes_swept[angle]["targets_loc"] = []
+
+                for key in susceptibility_region.keys():
+                    in_one = susceptibility_region[key].V2V3path.contains_points(
+                        np.array([v2, v3]).T, radius=0.0
+                    )
+
+                    if np.any(in_one):
+                        attitudes_swept[angle]["targets_in"].append(True)
+                        attitudes_swept[angle]["targets_loc"].append(in_one)
+                    else:
+                        attitudes_swept[angle]["targets_in"].append(False)
+                        attitudes_swept[angle]["targets_loc"].append(in_one)
+
+            self.swept_angles[idx] = attitudes_swept
 
     def V2V3_at_one_attitude(self, ra_degrees, dec_degrees, v3pa, verbose=False):
         """
