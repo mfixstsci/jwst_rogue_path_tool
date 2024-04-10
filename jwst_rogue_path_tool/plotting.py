@@ -7,92 +7,113 @@ import numpy as np
 from pysiaf.utils import rotations
 
 
-def create_exposure_plots(program, ncols=3):
+def create_exposure_plots(observation, ra, dec, **kwargs):
     """Generate exposure level plots"""
-    wedge_length = program.catalog_inner_radius - 1
 
-    for obs_id in program.observation_exposure_combos:
-        # Dynamically calculate number of rows based on ncols
-        nrows = len(program.observation_exposure_combos[obs_id]) // ncols + (
-            len(program.observation_exposure_combos[obs_id]) % ncols > 0
+    plt.rcParams["figure.figsize"] = (20,15)
+
+    inner_radius = kwargs.get("inner_radius", 8.0)
+    outer_radius = kwargs.get("outer_radius", 12.0)
+    ncols = kwargs.get("ncols", 4)
+
+    wedge_length = inner_radius - 1
+    exposure_frames = observation["exposure_frames"]
+    exposure_frames_data = exposure_frames.data
+
+    nrows = len(exposure_frames_data) // ncols + (len(exposure_frames_data) % ncols > 0)
+
+    catalog = exposure_frames.catalog
+    plotting_catalog = locate_targets_in_annulus(
+        catalog, ra, dec, inner_radius, outer_radius
+    )
+
+    obs_id = observation["visit"]["observation"][0]
+
+    for n, exp_num in enumerate(exposure_frames_data):
+
+        angle_start = exposure_frames.valid_starts_angles[exp_num]
+        angle_end = exposure_frames.valid_ends_angles[exp_num]
+
+        # Some exposures will have no valid/consecutive angles.
+        # if not angle_start or angle_end:
+        #     continue
+
+        ax = plt.subplot(nrows, ncols, n + 1)
+        ax.set_xlabel("RA [Degrees]")
+        ax.set_ylabel("DEC [Degrees]")
+        ax.set_title("Observation {}, Exposure: {}".format(obs_id, exp_num))
+        ax.scatter(ra, dec, marker="X", c="red")
+        ax.scatter(
+            plotting_catalog["ra"],
+            plotting_catalog["dec"],
+            c="deeppink",
         )
 
-        for n, exp_num in enumerate(program.observation_exposure_combos[obs_id]):
-            exposure = program.exposure_frames[obs_id][exp_num]
-            consecutive_angles = exposure.consecutive_angles
-            valid_angles = exposure.valid_angles
+        ax.invert_xaxis()
 
-            # Some exposures will have no valid/consecutive angles.
-            if not valid_angles:
-                continue
-
-            ax = plt.subplot(nrows, ncols, n + 1)
-            ax.set_xlabel("RA [Degrees]")
-            ax.set_ylabel("DEC [Degrees]")
-            ax.set_title("Observation {}, Exposure: {}".format(obs_id, exp_num))
-            ax.scatter(program.ra, program.dec, marker="X", c="red")
-            ax.scatter(
-                program.plotting_catalog["ra"],
-                program.plotting_catalog["dec"],
-                c="deeppink",
+        for angles in zip(angle_start, angle_end):
+            min_theta = min(angles)
+            max_theta = max(angles)
+            w = Wedge(
+                (ra, dec),
+                wedge_length,
+                min_theta,
+                max_theta,
+                fill=False,
+                color="darkseagreen",
+                joinstyle="round",
             )
+            ax.add_artist(w)
 
-            ax.invert_xaxis()
+        for angle in np.concatenate([angle_start, angle_end]):
+            exposure_frames.calculate_attitude(angle)
+            sus_region_patches = get_susceptibility_region_patch(exposure_frames, exp_num)
+            for patch in sus_region_patches:
+                ax.add_patch(patch)
 
-            for angles in consecutive_angles:
-                min_theta = min(angles)
-                max_theta = max(angles)
-                w = Wedge(
-                    (program.ra, program.dec),
-                    wedge_length,
-                    min_theta,
-                    max_theta,
-                    fill=False,
-                    color="darkseagreen",
-                    joinstyle="round",
-                )
-                ax.add_artist(w)
-
-            for angle in valid_angles:
-                exposure.calculate_attitude(angle)
-                sus_region_patches = get_susceptibility_region_patch(exposure)
-
-                for patch in sus_region_patches:
-                    ax.add_patch(patch)
-
-        plt.tight_layout()
-        plt.show()
+    plt.tight_layout()
+    plt.savefig('output.png')
 
 
-def create_observation_plot(program, obs_id):
+def create_observation_plot(observation, ra, dec, **kwargs):
     """Plot that describe all valid angles at the observation level"""
 
-    obs_level_valid_angles = []
-    wedge_length = program.catalog_inner_radius - 1
+    plt.rcParams["figure.figsize"] = (10,10)
 
-    for exp_num in program.exposure_frames[obs_id]:
-        exposure = program.exposure_frames[obs_id][exp_num]
-        valid_angles = exposure.consecutive_angles
-        obs_level_valid_angles.append(valid_angles)
+    inner_radius = kwargs.get("inner_radius", 8.0)
+    outer_radius = kwargs.get("outer_radius", 12.0)
 
-    obs_level_consecutive_angles = np.unique(obs_level_valid_angles)
+    wedge_length = inner_radius - 1
+    exposure_frames = observation["exposure_frames"]
+    exposure_frames_data = exposure_frames.data
+
+    catalog = exposure_frames.catalog
+    plotting_catalog = locate_targets_in_annulus(
+        catalog, ra, dec, inner_radius, outer_radius
+    )
+
+    all_starting_angles = [exposure_frames.valid_starts_angles[exp_num] for exp_num in exposure_frames_data]
+    all_ending_angles = [exposure_frames.valid_ends_angles[exp_num] for exp_num in exposure_frames_data]
+
+    all_starting_angles = np.unique(np.concatenate(all_starting_angles))
+    all_ending_angles = np.unique(np.concatenate(all_ending_angles))
 
     ax = plt.subplot()
     ax.set_xlabel("RA [Degrees]")
     ax.set_ylabel("DEC [Degrees]")
     ax.set_title("Observation Level Plot")
-    ax.scatter(program.ra, program.dec, marker="X", c="red")
+    ax.scatter(ra, dec, marker="X", c="red")
     ax.scatter(
-        program.plotting_catalog["ra"], program.plotting_catalog["dec"], c="deeppink"
+        plotting_catalog["ra"], plotting_catalog["dec"], c="deeppink"
     )
 
     ax.invert_xaxis()
 
-    for angles in obs_level_consecutive_angles:
+    for angles in zip(all_starting_angles, all_ending_angles):
         min_theta = min(angles)
         max_theta = max(angles)
         w = Wedge(
-            (program.ra, program.dec),
+            (ra, dec),
             wedge_length,
             min_theta,
             max_theta,
@@ -106,14 +127,16 @@ def create_observation_plot(program, obs_id):
     plt.show()
 
 
-def get_susceptibility_region_patch(exposure):
-    region = exposure.sus_reg
+def get_susceptibility_region_patch(exposure_frames, exposure_id):
 
     patches = []
 
+    exposure = exposure_frames.data[exposure_id].loc[1]
+    region = exposure_frames.get_susceptibility_region(exposure)
+
     for key in region:
         module = region[key]
-        attitude = exposure.attitude
+        attitude = exposure_frames.attitude
 
         v2 = 3600 * module.V2V3path.vertices.T[0]  # degrees --> arcseconds
         v3 = 3600 * module.V2V3path.vertices.T[1]  # degrees --> arcseconds
@@ -133,14 +156,14 @@ def get_susceptibility_region_patch(exposure):
     return patches
 
 
-def locate_targets_in_annulus(self, inner_radius, outer_radius):
+def locate_targets_in_annulus(catalog, ra, dec, inner_radius, outer_radius):
     """Calculate the targets from a catalog that fall within inner and outer radii."""
 
     # Set coordinates for target and catalog
-    target_coordinates = SkyCoord(self.ra * u.deg, self.dec * u.deg, frame="icrs")
+    target_coordinates = SkyCoord(ra * u.deg, dec * u.deg, frame="icrs")
     catalog_coordinates = SkyCoord(
-        self.catalog["ra"].values * u.deg,
-        self.catalog["dec"].values * u.deg,
+        catalog["ra"].values * u.deg,
+        catalog["dec"].values * u.deg,
         frame="icrs",
     )
 
@@ -149,6 +172,6 @@ def locate_targets_in_annulus(self, inner_radius, outer_radius):
     mask = (separation.deg < outer_radius) & (separation.deg > inner_radius)
 
     # Retrieve all targets in masked region above.
-    self.catalog_inner_radius = inner_radius
-    self.catalog_outer_radius = outer_radius
-    self.plotting_catalog = self.catalog[mask]
+    plotting_catalog = catalog[mask]
+
+    return plotting_catalog

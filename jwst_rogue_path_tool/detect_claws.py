@@ -10,6 +10,7 @@ from tqdm import tqdm
 
 from jwst_rogue_path_tool.apt_sql_parser import AptSqlFile
 from jwst_rogue_path_tool.utils import get_valid_angles_windows
+from jwst_rogue_path_tool.plotting import create_exposure_plots, create_observation_plot
 
 
 class AptProgram:
@@ -42,15 +43,15 @@ class AptProgram:
         if "fixed_target" not in self.__sql.tablenames:
             raise Exception("JWST Rogue Path Tool only supports fixed targets")
 
-        self.angle_step = kwargs.get("angle_step", 1.0)
+        self.angular_step = kwargs.get("angular_step", 1.0)
         self.usr_defined_obs = kwargs.get("usr_defined_obs")
         self.observation_exposure_combos = collections.defaultdict(list)
-        self.inner_radius = kwargs.get("inner_radius", 8.0)
-        self.outer_radius = kwargs.get("outer_radius", 12.0)
 
     def __build_observations(self):
         """Convenience method to build observations"""
-        self.observations = Observations(self.__sql, self.usr_defined_obs)
+        self.observations = Observations(
+            self.__sql, self.usr_defined_obs
+        )
 
     def __build_exposure_frames(self):
         """Add exposure classes to APT Program"""
@@ -59,23 +60,27 @@ class AptProgram:
                 continue
             else:
                 observation = self.observations.data[observation_id]
-                exposure_frames = ExposureFrames(observation)
+                exposure_frames = ExposureFrames(observation, self.angular_step)
                 self.observations.data[observation_id]["exposure_frames"] = (
-                    exposure_frames.exposure_frames
+                    exposure_frames
                 )
-                self.observations.data[observation_id]["swept_angles"] = (
-                    exposure_frames.swept_angles
-                )
-                self.observations.data[observation_id]["valid_starts"] = (
-                    exposure_frames.valid_starts
-                )
-                self.observations.data[observation_id]["valid_ends"] = (
-                    exposure_frames.valid_ends
-                )
+
+    def plot_exposures(self, observation_id):
+        if observation_id not in self.observations.data.keys():
+            raise KeyError(f"{observation_id} IS NOT A VALID OBSERVATION ID")
+        else:
+            observation = self.observations.data[observation_id]
+            create_exposure_plots(observation, self.ra, self.dec)
+
+    def plot_observation(self, observation_id):
+        if observation_id not in self.observations.data.keys():
+            raise KeyError(f"{observation_id} IS NOT A VALID OBSERVATION ID")
+        else:
+            observation = self.observations.data[observation_id]
+            create_observation_plot(observation, self.ra, self.dec)
 
     def get_target_information(self):
         """obtain target information based on observation"""
-
         target_info = self.__sql.build_aptsql_dataframe("fixed_target")
 
         self.ra = target_info["ra_computed"][0]
@@ -87,28 +92,27 @@ class AptProgram:
         self.__build_observations()
         self.__build_exposure_frames()
 
-    def write_report(self, filename):
-        no_valid_angle_exposures = []
+    def write_report(self, filename, observation):
         f = open(filename, "a")
-        for obs_id in self.exposure_frames:
-            f.write(f"**** Valid Ranges for Observation {obs_id} ****\n")
-            all_valid_angles = []
-            for exp_num in self.exposure_frames[obs_id]:
-                valid_angles = self.exposure_frames[obs_id][exp_num].valid_angles
-                if valid_angles:
-                    all_valid_angles.append(
-                        self.exposure_frames[obs_id][exp_num].consecutive_angles
-                    )
-                else:
-                    no_valid_angle_exposures.append(exp_num)
-                    continue
-            intersecting_angles = np.unique(all_valid_angles).reshape(-1, 2)
-            for min_angle, max_angle in intersecting_angles:
-                f.write(
-                    f"PA Start -- PA End: {min_angle} -- {max_angle} [step size: {self.angle_step}]\n"
-                )
-        if no_valid_angle_exposures:
-            f.write(f"NO VALID ANGLES FOR EXPOSURES {no_valid_angle_exposures}\n")
+        exposure_frames = observation["exposure_frames"]
+
+        all_starting_angles = [exposure_frames.valid_starts_angles[exp_num] for exp_num in exposure_frames.data]
+        all_ending_angles = [exposure_frames.valid_ends_angles[exp_num] for exp_num in exposure_frames.data]
+
+        all_starting_angles = np.unique(np.concatenate(all_starting_angles))
+        all_ending_angles = np.unique(np.concatenate(all_ending_angles))
+
+        obs_id = observation["visit"]["observation"][0]
+
+        f.write(f"**** Valid Ranges for Observation {obs_id} ****\n")
+        for min_angle, max_angle in zip(all_starting_angles, all_ending_angles):
+            f.write(
+                f"PA Start -- PA End: {min_angle} -- {max_angle}\n"
+            )
+
+        # if no_valid_angle_exposures:
+        #     f.write(f"NO VALID ANGLES FOR EXPOSURES {no_valid_angle_exposures}\n")
+
         f.close()
 
 
@@ -142,9 +146,7 @@ class Observations:
                 if "template_coord_parallel_1" in visit_table:
                     aperture_names = exposure_table["AperName"]
                     nrc_visits = aperture_names.str.contains("NRC")
-                    self.data[observation_id]["exposures"] = exposure_table[
-                        nrc_visits
-                    ]
+                    self.data[observation_id]["exposures"] = exposure_table[nrc_visits]
             elif "template_coord_parallel_1" in visit_table:
                 # If NRC is not the primary, check to see if NRC is the secondary.
                 parallel_templates = visit_table["template_coord_parallel_1"]
@@ -156,9 +158,7 @@ class Observations:
                     # associated with the primary instrument
                     aperture_names = exposure_table["AperName"]
                     nrc_visits = aperture_names.str.contains("NRC")
-                    self.data[observation_id]["exposures"] = exposure_table[
-                        nrc_visits
-                    ]
+                    self.data[observation_id]["exposures"] = exposure_table[nrc_visits]
                 else:
                     self.unusable_observations.append(observation_id)
             else:
@@ -228,9 +228,10 @@ class Observations:
 
 
 class ExposureFrames:
-    def __init__(self, observation, **kwargs):
+    def __init__(self, observation, angular_step):
         self.assign_catalog()
         self.observation = observation
+        self.angular_step = angular_step
         self.observation_number = self.observation["visit"]["observation"][0]
         self.exposure_table = self.observation["exposures"]
         self.template_table = self.observation["nircam_templates"]
@@ -250,7 +251,7 @@ class ExposureFrames:
             how="left",
         ).set_index(self.module_by_exposure.index)
 
-        self.build_exposure_frames()
+        self.build_exposure_frames_data()
         self.check_in_susceptibility_region()
         self.get_visibility_windows()
 
@@ -272,15 +273,17 @@ class ExposureFrames:
 
         self.catalog = pd.read_csv(full_catalog_path)
 
-    def build_exposure_frames(self):
-        self.orders = self.exposure_frame_table.order_number.unique()
+    def build_exposure_frames_data(self):
+        dither_pointings = self.exposure_frame_table.dither_point_index
 
-        self.exposure_frames = {}
+        self.data = {}
 
-        for order in self.orders:
-            self.exposure_frames[order] = self.exposure_frame_table.loc[
-                self.exposure_frame_table.order_number == order
-            ]
+        exposure_by_order_number = self.exposure_frame_table.set_index(
+            ["exposure", "order_number"]
+        )
+
+        for idx in dither_pointings:
+            self.data[idx] = exposure_by_order_number.loc[idx, :]
 
     def get_susceptibility_region(self, exposure):
         sus_reg = {}
@@ -295,8 +298,11 @@ class ExposureFrames:
         return sus_reg
 
     def get_visibility_windows(self):
-        self.valid_starts = {}
-        self.valid_ends = {}
+        self.valid_starts_indices = {}
+        self.valid_ends_indices = {}
+
+        self.valid_starts_angles = {}
+        self.valid_ends_angles = {}
 
         for exp_num in self.swept_angles:
             angles_bool = [
@@ -305,22 +311,16 @@ class ExposureFrames:
             ]
 
             change = np.where(angles_bool != np.roll(angles_bool, 1))[0]
-            if change.size > 0:
-                if angles_bool[change[0]]:
-                    change = np.roll(change, 1)
-                    starts = angles_bool[change[::2]]
-                    ends = angles_bool[change[1::2]]
-                else:
-                    starts = np.array([])
-                    ends = np.array([])
-            else:
-                starts = np.array([])
-                ends = np.array([])
-            
-            self.valid_starts[exp_num] = starts
-            self.valid_ends[exp_num] = ends
+            if angles_bool[change[0]]:
+                change = np.roll(change, 1)
+            starts = change[::2]
+            ends = change[1::2]
 
-                
+            self.valid_starts_indices[exp_num] = starts
+            self.valid_ends_indices[exp_num] = ends
+
+            self.valid_starts_angles[exp_num] = (starts - 0.5) * self.angular_step
+            self.valid_ends_angles[exp_num] = (ends - 0.5) * self.angular_step
 
     def calculate_attitude(self, v3pa):
         self.attitude = rotations.attitude(
@@ -334,15 +334,18 @@ class ExposureFrames:
     def check_in_susceptibility_region(self):
         ra, dec = self.catalog["ra"], self.catalog["dec"]
         self.swept_angles = {}
-        for index, row in self.exposure_frames[1].iterrows():
-            self.exposure_data = row
-            susceptibility_region = self.get_susceptibility_region(row)
+
+        for idx in self.data:
+            self.dataframe = self.data[idx]
+            self.exposure_data = self.dataframe.loc[1]
+
+            susceptibility_region = self.get_susceptibility_region(self.exposure_data)
             attitudes_swept = collections.defaultdict(dict)
             attitudes = np.arange(0, 360, 1)
 
             print(
                 "Sweeping angles {} --> {} for Observation: {} and Exposure: {}".format(
-                    min(attitudes), max(attitudes), self.observation_number, index
+                    min(attitudes), max(attitudes), self.observation_number, idx
                 )
             )
 
@@ -373,7 +376,7 @@ class ExposureFrames:
                         attitudes_swept[angle]["targets_in"].append(False)
                         attitudes_swept[angle]["targets_loc"].append(in_one)
 
-            self.swept_angles[index] = attitudes_swept
+            self.swept_angles[idx] = attitudes_swept
 
     def V2V3_at_one_attitude(self, ra_degrees, dec_degrees, v3pa, verbose=False):
         """
