@@ -1,4 +1,23 @@
-"""Constants used in JWST Rogue Paths Tool"""
+"""Constants used in JWST Rogue Path Tool
+
+Authors
+-------
+    - Mario Gennaro
+    - Mees Fix
+
+Use
+---
+    Constants in this module can be imported as follows:
+
+    >>> from jwst_rogue_path_tool.constants import (
+            CATALOG_BANDPASS,
+            NIRCAM_ZEROPOINTS,
+            SUSCEPTIBILITY_REGION_FULL,
+            SUSCEPTIBILITY_REGION_SMALL,
+            ZEROPOINT,
+        )
+"""
+
 import numpy as np
 
 SUSCEPTIBILITY_REGION_FULL = {

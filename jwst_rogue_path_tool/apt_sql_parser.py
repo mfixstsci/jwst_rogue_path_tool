@@ -1,19 +1,47 @@
-#!/usr/bin/env python
+"""This module contains all of the routines for parsing a JWST APT SQL file.
+
+Authors
+-------
+    - Mario Gennaro
+    - Mees Fix
+
+Use
+---
+    Routines in this module can be imported as follows:
+
+    >>> from jwst_rogue_path_tool.apt_sql_parser import AptSqlFile
+    >>> filename = "/path/to/sql_apt_file.sql"
+    >>> sql = AptSqlFile(filename)
+"""
 
 import pandas as pd
 from astropy.table import Table
 
 class AptSqlFile:
-    """An sql file exported by APT."""
+    """Read and parse SQL file generated from APT"""
 
     def __init__(self, sqlfile):
-        """Read data from sql file. Get list of tables names."""
+        """
+        Parameters
+        ----------
+        sqlfile : str
+            Name of APT SQL file (filename.sql)
+        """
         self.__sqlfile = sqlfile
         self.__sql = self.read_sql_file()
         self.tablenames = self.get_table_names()
 
     def build_aptsql_dataframe(self, tablename, show_table=False):
-        """Create pandas dataframe from scraped apt sql data"""
+        """Create pandas dataframe from parsed APT file
+
+        Parameters
+        ----------
+        tablename : str
+            Name of table to generate pandas dataframe from.
+
+        show_table : bool
+            Show table in web browser.
+        """
         # Obtain metadata, create dataframe, apply to_numeric to convert all
         # numeric like columns from type object to int or float
         data = self.get_aptsql_metadata(tablename)
@@ -28,7 +56,13 @@ class AptSqlFile:
         return df
 
     def get_aptsql_metadata(self, tablename):
-        """Return a list of dictionaries with key/value pairs scraped from sql file."""
+        """Return a list of dictionaries with key/value pairs parsed from sql file.
+        
+        Parameters
+        ----------
+        tablename : str
+            Table name that is used to parse out data from SQL file.
+        """
         prefix = "insert into " + tablename + " "
         rows = list()
 
@@ -45,7 +79,7 @@ class AptSqlFile:
         return rows
 
     def get_table_names(self):
-        """Parse sql insert statements to determine table names."""
+        """Parse SQL insert statements to determine table names."""
 
         prefix = "insert into "
         names = list()
@@ -60,7 +94,7 @@ class AptSqlFile:
         return names
 
     def read_sql_file(self):
-        """Read sql file exported by APT. Strip trailing newlines."""
+        """Read SQL file exported by APT. Strip trailing newlines."""
 
         sql = list()
 

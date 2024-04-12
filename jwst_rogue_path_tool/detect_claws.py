@@ -1,3 +1,28 @@
+"""
+This module contains objects that perform the data organizing and analysis
+routines for detecting "Claw" anomalies with NIRCam.
+
+The AptProgram class accepts an APT sql file that organizes data with observations,
+visits, exposures and parses them into python objects (mainly pandas dataframes).
+
+These data are then used to calculate whether exposures and observations are susceptible
+to claw anomalies. We display these data in figures at the exposure and observaiton level.
+
+Authors
+-------
+    - Mario Gennaro
+    - Mees Fix
+
+Use
+---
+    Routines in this module can be imported as follows:
+
+    >>> from jwst_rogue_path_tool.detect_claws import AptProgram
+    >>> filename = "/path/to/sql_apt_file.sql"
+    >>> program = AptProgram(filename, angular_step=1, usr_defined_obs=[1])
+    >>> program.run()
+"""
+
 import collections
 from copy import deepcopy
 import os
@@ -21,29 +46,27 @@ from jwst_rogue_path_tool.constants import (
 from jwst_rogue_path_tool.plotting import create_exposure_plots, create_observation_plot
 
 
+PROJECT_DIRNAME = os.path.dirname(__file__)
+
+
 class AptProgram:
-    """
-    Class that handles the APT-program-level information.
-    It can configure "observation" objects based on the desired observation ids,
-    and can cal the observation.check_multiple_angles method to perform
-    a check of stars in the susceptibility region for all the exposures of a
-    given observation and for multiple observations of a given program
+    """Class that handles the APT-program-level information.
+    AptProgram takes the sqlfile input and uses the "Observation" and "ExposureFrame"
+    objects to organize data into python objects that can be used for various analyses.
     """
 
-    def __init__(self, sqlfile, **kwargs):
+    def __init__(self, sqlfile, angular_step=1.0, usr_defined_obs=None):
         """
         Parameters
         ----------
         sqlfile : str
             Path to an APT-exported sql file
 
-        angle_step : float
-            Angle step size when searching for targets in susceptibility region
+        angular_step : float
+            Attitude angle step size used to check if surrounding targets land
+            in susceptibility region
 
-        instrument : str
-            JWST Instrument name
-
-        usr_defined_obs : list like
+        usr_defined_obs : list
             List of specific oberservations to load from program
         """
 
@@ -51,16 +74,15 @@ class AptProgram:
         if "fixed_target" not in self.__sql.tablenames:
             raise Exception("JWST Rogue Path Tool only supports fixed targets")
 
-        self.angular_step = kwargs.get("angular_step", 1.0)
-        self.usr_defined_obs = kwargs.get("usr_defined_obs", None)
-        self.observation_exposure_combos = collections.defaultdict(list)
+        self.angular_step = angular_step
+        self.usr_defined_obs = usr_defined_obs
 
     def __build_observations(self):
-        """Convenience method to build observations"""
+        """Convenience method to build Observation objects"""
         self.observations = Observations(self.__sql, self.usr_defined_obs)
 
     def __build_exposure_frames(self):
-        """Add exposure classes to APT Program"""
+        """Convenience method to build ExposureFrame objects"""
         for observation_id in self.observations.observation_number_list:
             if observation_id in self.observations.unusable_observations:
                 continue
@@ -71,7 +93,24 @@ class AptProgram:
                     exposure_frames
                 )
 
+    def get_target_information(self):
+        """Obtain RA and Dec of target from APT SQL file"""
+        target_info = self.__sql.build_aptsql_dataframe("fixed_target")
+
+        self.ra = target_info["ra_computed"][0]
+        self.dec = target_info["dec_computed"][0]
+
     def plot_exposures(self, observation_id):
+        """Create plot for individual exposures for a given observation. Plot
+        will contain targets defined in a specific inner and outer radius
+        defined by user. Check `jwst_rogue_path_tool.plotting.create_exposure_plots`
+        for more information.
+
+        Parameters
+        ----------
+        observation_id : int
+            Observation id number to generate figures from.
+        """
         if observation_id not in self.observations.data.keys():
             raise KeyError(f"{observation_id} IS NOT A VALID OBSERVATION ID")
         else:
@@ -79,26 +118,40 @@ class AptProgram:
             create_exposure_plots(observation, self.ra, self.dec)
 
     def plot_observation(self, observation_id):
+        """Create plot at the observation level. The "observation level" is
+        defined as all of the valid angles from each exposure combined. Plot
+        will contain targets defined in a specific inner and outer radius
+        defined by user. Check `jwst_rogue_path_tool.plotting.create_observation_plot`
+        for more information.
+
+        Parameters
+        ----------
+        observation_id : int
+            Observation id number to generate figures from.
+        """
         if observation_id not in self.observations.data.keys():
             raise KeyError(f"{observation_id} IS NOT A VALID OBSERVATION ID")
         else:
             observation = self.observations.data[observation_id]
             create_observation_plot(observation, self.ra, self.dec)
 
-    def get_target_information(self):
-        """obtain target information based on observation"""
-        target_info = self.__sql.build_aptsql_dataframe("fixed_target")
-
-        self.ra = target_info["ra_computed"][0]
-        self.dec = target_info["dec_computed"][0]
-
     def run(self):
-        """Run code sequentially"""
+        """Convenience method to build AptProgram"""
         self.get_target_information()
         self.__build_observations()
         self.__build_exposure_frames()
 
     def write_report(self, filename, observation):
+        """Write "observation level" report given an observation object.
+
+        Parameters
+        ----------
+        filename : str
+            Name of file to write report into.
+
+        observation : jwst_rogue_path_tool.Observations
+            Observation object to extract valid angle data from.
+        """
         f = open(filename, "a")
         exposure_frames = observation["exposure_frames"]
 
@@ -127,14 +180,33 @@ class AptProgram:
 
 
 class Observations:
+    """Class the organizes metadata from APT SQL file into python object.
+    This object is organized by observation number and contains metadata
+    associated with it.
+    """
+
     def __init__(self, apt_sql, usr_defined_obs=None):
+        """
+        Parameters
+        ----------
+        apt_sql : jwst_rogue_path_tool.apt_sql_parser.AptSqlFile
+            Parsed SQL data into python objects (pandas dataframes)
+
+        usr_defined_obs : list
+            List of specific oberservations to load from program
+        """
         self.__sql = apt_sql
         self.program_data_by_observation(usr_defined_obs)
         self.observation_number_list = self.data.keys()
         self.drop_unsupported_observations()
 
     def drop_unsupported_observations(self):
-        """Drop observations and exposures from program data"""
+        """Convenience method to drop unsupported observation types. This
+        method checks all observations including parallels. All metadata
+        is kept and new class attribute `self.supported_observations` is created
+        to avoid confusion when processing. `self.supported_observations` are the
+        only observation from a program that are analyzed by `jwst_rogue_path_tool`.
+        """
         supported_templates = [
             "NIRCam Imaging",
             "NIRCam Wide Field Slitless Spectroscopy",
@@ -184,11 +256,8 @@ class Observations:
 
         Parameters
         ----------
-        None
-
-        Returns
-        -------
-        None
+        specific_observations : list
+            List of observations defined by user.
         """
         program_data_by_observation_id = collections.defaultdict(dict)
         target_information = self.__sql.build_aptsql_dataframe("fixed_target")
@@ -238,7 +307,23 @@ class Observations:
 
 
 class ExposureFrames:
+    """Class the organizes data from a single observation (made of exposures)
+    into exposure frames. An exposure frame is a group of exposures associated
+    with a value in the NRC order specification table. Exposures with the same
+    order number are a part of the same exposure frame. This object contains
+    """
+
     def __init__(self, observation, angular_step):
+        """
+        Parameters
+        ----------
+        observation : dict
+            Dictionary containing data from a single observation
+
+        angular_step : float
+            Attitude angle step size used to check if surrounding targets land
+            in susceptibility region
+        """
         self.assign_catalog()
         self.observation = observation
         self.angular_step = angular_step
@@ -265,25 +350,36 @@ class ExposureFrames:
         self.check_in_susceptibility_region()
         self.get_visibility_windows()
 
-    def assign_catalog(self, catalog_name="2mass"):
-        """Assign Catalog"""
-        catalog_names = {"2mass": "two_mass_kmag_lt_5.csv", "simbad": ""}
+    def assign_catalog(self, catalog_name="2MASS"):
+        """Obtain magnitude selected catalog as pandas dataframe.
+
+        Parameters
+        ----------
+        catalog_name : str
+            Survey name of catalog with star positions and magnitudes [options: 2MASS, SIMBAD]
+        """
+        catalog_names = {"2MASS": "two_mass_kmag_lt_5.csv", "SIMBAD": ""}
 
         if catalog_name not in catalog_names.keys():
             raise Exception(
-                "AVAILABLE CATALOG NAMES ARE '2mass' and 'simbad' {} NOT AVAILABLE".format(
+                "AVAILABLE CATALOG NAMES ARE '2MASS' and 'SIMBAD' {} NOT AVAILABLE".format(
                     catalog_name
                 )
             )
 
         self.catalog_name = catalog_name
         selected_catalog = catalog_names[self.catalog_name]
-        project_dirname = os.path.dirname(__file__)
-        full_catalog_path = os.path.join(project_dirname, "data", selected_catalog)
+        full_catalog_path = os.path.join(PROJECT_DIRNAME, "data", selected_catalog)
 
         self.catalog = pd.read_csv(full_catalog_path)
 
     def build_exposure_frames_data(self):
+        """Use exposure table to separate data into exposure frame specific
+        pandas dataframes. Resetting the index to combinations of exposure and 
+        order number will separate the exposures into exposures associate with
+        a specific dither pointing. These tables contain exposures that all
+        share the same RA and Dec.
+        """
         dither_pointings = self.exposure_frame_table.dither_point_index
 
         self.data = {}
@@ -296,6 +392,14 @@ class ExposureFrames:
             self.data[idx] = exposure_by_order_number.loc[idx, :]
 
     def get_susceptibility_region(self, exposure):
+        """Based on the module of an exposure frame, create a SuceptibilityRegion 
+        instance.
+
+        Parameters
+        ----------
+        exposure : pandas.core.series.Series
+            A row from an exposure frame table
+        """
         sus_reg = {}
         if exposure["modules"] == "ALL" or exposure["modules"] == "BOTH":
             sus_reg["A"] = SusceptibilityRegion(module="A")
@@ -308,6 +412,9 @@ class ExposureFrames:
         return sus_reg
 
     def get_visibility_windows(self):
+        """Method to calculate when a target has entered/exited a 
+        susceptibility region.
+        """
         self.valid_starts_indices = {}
         self.valid_ends_indices = {}
 
@@ -333,6 +440,13 @@ class ExposureFrames:
             self.valid_ends_angles[exp_num] = (ends - 0.5) * self.angular_step
 
     def calculate_attitude(self, v3pa):
+        """Calculate attitude matrix given V3 position angle.
+
+        Parameters
+        ----------
+        v3pa : float
+            V3 position angle
+        """
         self.attitude = rotations.attitude(
             self.exposure_data["v2"],
             self.exposure_data["v3"],
@@ -342,6 +456,24 @@ class ExposureFrames:
         )
 
     def check_in_susceptibility_region(self):
+        """Method to check if stars from catalog are located in susceptibility
+        region per angle of attitude. Angles are 0.0 --> 360.0 degrees in steps
+        of `self.angular_step`. This method creates a large dictionary that
+        contains contain keys "targets_in" and "targets_loc" for each angle of
+        attitude.
+        
+        For a given angle of attitude, if targets from the catalog fall in the
+        susceptibility region, "targets_in" will be True and "targets_loc" are
+        the indicies of these stars in the catalog.
+
+        When an exposure frame uses both modules, "targets_in" and "targets_loc"
+        are two-dimensional. 
+
+        ```
+                         A      B         A      B          A      B
+        "targets_in" : [True, True] or [False, True] ... [False, False]
+        ```
+        """
         ra, dec = self.catalog["ra"], self.catalog["dec"]
         self.swept_angles = {}
 
@@ -349,7 +481,9 @@ class ExposureFrames:
             self.dataframe = self.data[idx]
             self.exposure_data = self.dataframe.loc[1]
 
-            susceptibility_region = self.get_susceptibility_region(self.exposure_data)
+            self.susceptibility_region = self.get_susceptibility_region(
+                self.exposure_data
+            )
             attitudes_swept = collections.defaultdict(dict)
             attitudes = np.arange(0, 360, self.angular_step)
 
@@ -374,8 +508,8 @@ class ExposureFrames:
                 attitudes_swept[angle]["targets_in"] = []
                 attitudes_swept[angle]["targets_loc"] = []
 
-                for key in susceptibility_region.keys():
-                    in_one = susceptibility_region[key].V2V3path.contains_points(
+                for key in self.susceptibility_region.keys():
+                    in_one = self.susceptibility_region[key].V2V3path.contains_points(
                         np.array([v2, v3]).T, radius=0.0
                     )
 

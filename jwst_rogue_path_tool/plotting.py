@@ -1,3 +1,29 @@
+"""
+This module contains all of the plotting functions for the JWST Rogue Path Tool.
+Currently, the tool supports exposure and observation level plots.
+
+Authors
+-------
+    - Mario Gennaro
+    - Mees Fix
+
+Use
+---
+    Routines in this module can be imported as follows:
+
+    >>> from jwst_rogue_path_tool.plotting import create_exposure_plots, create_observation_plots
+    >>> from jwst_rogue_path_tool.detect_claws import AptProgram
+    
+    >>> filename = "/path/to/sql_apt_file.sql"
+    >>> program = AptProgram(filename, angular_step=1, usr_defined_obs=[1])
+    >>> program.run()
+
+    >>> observation = program.observations.data[1]  # get obs_id 1 from program
+    >>> ra, dec = program.ra, program.dec
+    >>> create_exposure_plots(observation, ra, dec)
+    >>> create_observation_plot(observation, ra, dec)
+"""
+
 import astropy.units as u
 from astropy.coordinates import SkyCoord
 from matplotlib.patches import PathPatch, Wedge
@@ -8,9 +34,21 @@ from pysiaf.utils import rotations
 
 
 def create_exposure_plots(observation, ra, dec, **kwargs):
-    """Generate exposure level plots"""
+    """Generate exposure level plots
 
-    plt.rcParams["figure.figsize"] = (20,15)
+    Parameters
+    ----------
+    ra : float
+        Right Ascension in degrees
+
+    dec : float
+        Declination in degrees
+
+    **kwarg : dict
+        Arbitrary keyword arguements
+    """
+
+    plt.rcParams["figure.figsize"] = (20, 15)
 
     inner_radius = kwargs.get("inner_radius", 8.0)
     outer_radius = kwargs.get("outer_radius", 12.0)
@@ -30,7 +68,6 @@ def create_exposure_plots(observation, ra, dec, **kwargs):
     obs_id = observation["visit"]["observation"][0]
 
     for n, exp_num in enumerate(exposure_frames_data):
-
         angle_start = exposure_frames.valid_starts_angles[exp_num]
         angle_end = exposure_frames.valid_ends_angles[exp_num]
 
@@ -67,18 +104,34 @@ def create_exposure_plots(observation, ra, dec, **kwargs):
 
         for angle in np.concatenate([angle_start, angle_end]):
             exposure_frames.calculate_attitude(angle)
-            sus_region_patches = get_susceptibility_region_patch(exposure_frames, exp_num)
+            sus_region_patches = get_susceptibility_region_patch(
+                exposure_frames, exp_num
+            )
             for patch in sus_region_patches:
                 ax.add_patch(patch)
 
     plt.tight_layout()
-    plt.savefig('output.png')
+    plt.savefig("output.png")
 
 
 def create_observation_plot(observation, ra, dec, **kwargs):
-    """Plot that describe all valid angles at the observation level"""
+    """Plot that describe all valid angles at the observation level.
+    The observation level plot is a single plot of all valid angles 
+    from a set of exposures.
+    
+    Parameters
+    ----------
+    ra : float
+        Right Ascension in degrees
 
-    plt.rcParams["figure.figsize"] = (10,10)
+    dec : float
+        Declination in degrees
+
+    **kwarg : dict
+        Arbitrary keyword arguements
+    """
+
+    plt.rcParams["figure.figsize"] = (10, 10)
 
     inner_radius = kwargs.get("inner_radius", 8.0)
     outer_radius = kwargs.get("outer_radius", 12.0)
@@ -92,8 +145,12 @@ def create_observation_plot(observation, ra, dec, **kwargs):
         catalog, ra, dec, inner_radius, outer_radius
     )
 
-    all_starting_angles = [exposure_frames.valid_starts_angles[exp_num] for exp_num in exposure_frames_data]
-    all_ending_angles = [exposure_frames.valid_ends_angles[exp_num] for exp_num in exposure_frames_data]
+    all_starting_angles = [
+        exposure_frames.valid_starts_angles[exp_num] for exp_num in exposure_frames_data
+    ]
+    all_ending_angles = [
+        exposure_frames.valid_ends_angles[exp_num] for exp_num in exposure_frames_data
+    ]
 
     all_starting_angles = np.unique(np.concatenate(all_starting_angles))
     all_ending_angles = np.unique(np.concatenate(all_ending_angles))
@@ -103,9 +160,7 @@ def create_observation_plot(observation, ra, dec, **kwargs):
     ax.set_ylabel("DEC [Degrees]")
     ax.set_title("Observation Level Plot")
     ax.scatter(ra, dec, marker="X", c="red")
-    ax.scatter(
-        plotting_catalog["ra"], plotting_catalog["dec"], c="deeppink"
-    )
+    ax.scatter(plotting_catalog["ra"], plotting_catalog["dec"], c="deeppink")
 
     ax.invert_xaxis()
 
@@ -128,11 +183,17 @@ def create_observation_plot(observation, ra, dec, **kwargs):
 
 
 def get_susceptibility_region_patch(exposure_frames, exposure_id):
+    """Obtain data for susceptibility region and generate plottable
+    patch.
 
+    Parameters
+    ----------
+    exposure_frames : jwst_rogue_path_tool.detect_claws.ExposureFrames
+        ExposureFrame object associated with observation.
+    """
     patches = []
 
-    exposure = exposure_frames.data[exposure_id].loc[1]
-    region = exposure_frames.get_susceptibility_region(exposure)
+    region = exposure_frames.susceptibilty_region
 
     for key in region:
         module = region[key]
@@ -157,7 +218,25 @@ def get_susceptibility_region_patch(exposure_frames, exposure_id):
 
 
 def locate_targets_in_annulus(catalog, ra, dec, inner_radius, outer_radius):
-    """Calculate the targets from a catalog that fall within inner and outer radii."""
+    """Calculate the targets from a catalog that fall within inner and outer radii.
+
+    Parameters
+    ----------
+    catalog : pandas.core.frame.DataFrame
+        DataFrame of star positions and magnitudes from 2MASS
+
+    ra : float
+        Right Ascension in degrees
+
+    dec : float
+        Declination in degrees
+
+    inner_radius : float
+        Inner radius of annulus
+
+    outer_radius : float
+        Outer area of annulus
+    """
 
     # Set coordinates for target and catalog
     target_coordinates = SkyCoord(ra * u.deg, dec * u.deg, frame="icrs")
