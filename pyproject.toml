@@ -17,6 +17,7 @@ dependencies = [
     "pandas>=2.0.3",
     "pip>=23.1.2",
     "pysiaf>=0.22.0",
+    "scipy>=1.12.0",
     "tqdm>=4.66.2",
 ]
 

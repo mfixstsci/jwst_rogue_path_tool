@@ -2,14 +2,22 @@ import collections
 from copy import deepcopy
 import os
 
+from astropy.io import fits
 from matplotlib.path import Path
 import numpy as np
 import pandas as pd
 from pysiaf.utils import rotations
+from scipy.ndimage import gaussian_filter
 from tqdm import tqdm
 
 from jwst_rogue_path_tool.apt_sql_parser import AptSqlFile
-from jwst_rogue_path_tool.utils import get_valid_angles_windows
+from jwst_rogue_path_tool.constants import (
+    CATALOG_BANDPASS,
+    NIRCAM_ZEROPOINTS,
+    SUSCEPTIBILITY_REGION_FULL,
+    SUSCEPTIBILITY_REGION_SMALL,
+    ZEROPOINT,
+)
 from jwst_rogue_path_tool.plotting import create_exposure_plots, create_observation_plot
 
 
@@ -44,14 +52,12 @@ class AptProgram:
             raise Exception("JWST Rogue Path Tool only supports fixed targets")
 
         self.angular_step = kwargs.get("angular_step", 1.0)
-        self.usr_defined_obs = kwargs.get("usr_defined_obs")
+        self.usr_defined_obs = kwargs.get("usr_defined_obs", None)
         self.observation_exposure_combos = collections.defaultdict(list)
 
     def __build_observations(self):
         """Convenience method to build observations"""
-        self.observations = Observations(
-            self.__sql, self.usr_defined_obs
-        )
+        self.observations = Observations(self.__sql, self.usr_defined_obs)
 
     def __build_exposure_frames(self):
         """Add exposure classes to APT Program"""
@@ -96,8 +102,14 @@ class AptProgram:
         f = open(filename, "a")
         exposure_frames = observation["exposure_frames"]
 
-        all_starting_angles = [exposure_frames.valid_starts_angles[exp_num] for exp_num in exposure_frames.data]
-        all_ending_angles = [exposure_frames.valid_ends_angles[exp_num] for exp_num in exposure_frames.data]
+        all_starting_angles = [
+            exposure_frames.valid_starts_angles[exp_num]
+            for exp_num in exposure_frames.data
+        ]
+        all_ending_angles = [
+            exposure_frames.valid_ends_angles[exp_num]
+            for exp_num in exposure_frames.data
+        ]
 
         all_starting_angles = np.unique(np.concatenate(all_starting_angles))
         all_ending_angles = np.unique(np.concatenate(all_ending_angles))
@@ -106,9 +118,7 @@ class AptProgram:
 
         f.write(f"**** Valid Ranges for Observation {obs_id} ****\n")
         for min_angle, max_angle in zip(all_starting_angles, all_ending_angles):
-            f.write(
-                f"PA Start -- PA End: {min_angle} -- {max_angle}\n"
-            )
+            f.write(f"PA Start -- PA End: {min_angle} -- {max_angle}\n")
 
         # if no_valid_angle_exposures:
         #     f.write(f"NO VALID ANGLES FOR EXPOSURES {no_valid_angle_exposures}\n")
@@ -341,7 +351,7 @@ class ExposureFrames:
 
             susceptibility_region = self.get_susceptibility_region(self.exposure_data)
             attitudes_swept = collections.defaultdict(dict)
-            attitudes = np.arange(0, 360, 1)
+            attitudes = np.arange(0, 360, self.angular_step)
 
             print(
                 "Sweeping angles {} --> {} for Observation: {} and Exposure: {}".format(
@@ -407,145 +417,133 @@ class ExposureFrames:
         return v2_degrees, v3_degress
 
 
-class SusceptibilityRegion:
-    def __init__(self, module, small=False):
-        if small:
-            self.module_data = {
-                "A": np.array(
-                    [
-                        [
-                            2.28483,
-                            0.69605,
-                            0.43254,
-                            0.57463,
-                            0.89239,
-                            1.02414,
-                            1.70874,
-                            2.28483,
-                            2.28483,
-                        ],
-                        [
-                            10.48440,
-                            10.48183,
-                            10.25245,
-                            10.12101,
-                            10.07204,
-                            9.95349,
-                            10.03854,
-                            10.04369,
-                            10.48440,
-                        ],
-                    ]
-                ),
-                "B": np.array(
-                    [
-                        [
-                            -0.96179,
-                            -1.10382,
-                            -2.41445,
-                            -2.54651,
-                            -2.54153,
-                            -2.28987,
-                            -1.69435,
-                            -1.46262,
-                            -1.11130,
-                            -0.95681,
-                            -0.59551,
-                            -0.58306,
-                            -0.96179,
-                        ],
-                        [
-                            10.03871,
-                            10.15554,
-                            10.15554,
-                            10.04368,
-                            9.90945,
-                            9.82741,
-                            9.76030,
-                            9.64347,
-                            9.62855,
-                            9.77273,
-                            9.88459,
-                            10.07848,
-                            10.03871,
-                        ],
-                    ]
-                ),
-            }
+class FixedAngle:
+    def __init__(self, observation):
+        self.observation = observation
+        self.exposure_frame_object = self.observation["exposure_frames"]
+        self.catalog_name = self.exposure_frame_object.catalog_name
+        self.exposure_frame_table = self.observation.exposure_frame_table
+
+        self.filter_modules_combos = self.exposure_frame_table.groupby(
+            ["filter_short", "modules"]
+        ).size()
+
+        self.total_exposure_duration = self.get_total_exposure_duration()
+        self.get_pupil_from_filter()
+
+    def calculate_absolute_magnitude(self):
+        self.catalog = self.observation.exposure_frame_object.catalog
+        self.bands = CATALOG_BANDPASS[self.catalog_name]
+
+        fict_mag_A, fict_mag_B = {}, {}
+        for band in self.bands:
+            fict_mag_A[band] = (
+                self.catalog[band] - 2.5 * np.log10(avg_intensity_A) + ZEROPOINT
+            )
+            fict_mag_B[band] = (
+                self.catalog[band] - 2.5 * np.log10(avg_intensity_B) + ZEROPOINT
+            )
+
+            fict_mag_A[band].replace(np.inf, 99.0, inplace=True)
+            fict_mag_B[band].replace(np.inf, 99.0, inplace=True)
+
+    def get_total_exposure_duration(self):
+        total_exposure_duration_table = self.exposure_frame_table.groupby(
+            "order_number"
+        ).sum()["photon_collecting_duration"]
+
+        return total_exposure_duration_table
+
+    def get_pupil_from_filter(self):
+        self.unique_pupils = {}
+        for fltr in self.filter_modules_combos["filter_short"]:
+            if "+" in fltr:
+                splt = filter.split("+")
+                pupil = splt[0]
+                filter = splt[1]
+            elif "_" in fltr:
+                splt = filter.split("_")
+                pupil = splt[0]
+                filter = splt[1]
+            else:
+                pupil = "CLEAR"
+
+            self.unique_pupils[filter] = pupil
+
+    def get_empirical_zero_points(self, module, pupil, filter):
+        if module == "A":
+            return NIRCAM_ZEROPOINTS["zeropoints_A"][f"{pupil}+{filter}"]
+        elif module == "B":
+            return NIRCAM_ZEROPOINTS["zeropoints_B"][f"{pupil}+{filter}"]
         else:
-            self.module_data = {
-                "A": np.array(
-                    [
-                        [
-                            2.64057,
-                            2.31386,
-                            0.47891,
-                            0.22949,
-                            -0.04765,
-                            -0.97993,
-                            -0.54959,
-                            0.39577,
-                            0.39577,
-                            1.08903,
-                            1.56903,
-                            2.62672,
-                            2.64057,
-                        ],
-                        [
-                            10.33689,
-                            10.62035,
-                            10.64102,
-                            10.36454,
-                            10.65485,
-                            10.63687,
-                            9.89380,
-                            9.47981,
-                            9.96365,
-                            9.71216,
-                            9.31586,
-                            9.93600,
-                            10.33689,
-                        ],
-                    ]
-                ),
-                "B": np.array(
-                    [
-                        [
-                            0.52048,
-                            0.03549,
-                            -0.28321,
-                            -0.49107,
-                            -2.80515,
-                            -2.83287,
-                            -1.58575,
-                            -0.51878,
-                            -0.51878,
-                            -0.40792,
-                            0.11863,
-                            0.70062,
-                            0.52048,
-                        ],
-                        [
-                            10.32307,
-                            10.32307,
-                            10.01894,
-                            10.33689,
-                            10.33689,
-                            9.67334,
-                            9.07891,
-                            9.63187,
-                            8.99597,
-                            8.96832,
-                            9.21715,
-                            9.70099,
-                            10.32307,
-                        ],
-                    ]
-                ),
-            }
+            assert ValueError(f"module must be value 'A' or 'B' not {module}")
+
+    def get_ground_band(self, pupil, filter, catalog="2MASS"):
+        if catalog == "2MASS":
+            return NIRCAM_ZEROPOINTS["match2MASS"][f"{pupil}+{filter}"]
+        elif catalog == "SIMBAD":
+            return NIRCAM_ZEROPOINTS["matchSIMBAD"][f"{pupil}+{filter}"]
+        else:
+            assert ValueError(
+                f"Catalog must be value '2MASS' or 'SIMBAD' not {catalog}"
+            )
+
+
+class SusceptibilityRegion:
+    def __init__(self, module, small=False, smooth=False):
+        if small:
+            self.module_data = SUSCEPTIBILITY_REGION_SMALL
+        else:
+            self.module_data = SUSCEPTIBILITY_REGION_FULL
 
         self.module = module
+        self.smooth = smooth
         self.V2V3path = self.get_path()
+
+    def get_intensity(self, V2, V3):
+        if self.module == "A":
+            filename = "Rogue path NCA.fits"
+        else:
+            filename = "Rogue path NCB.fits"
+
+        self.filename = "path/to/future/datadir" + filename
+        self.fh = fits.getheader(self.filename)
+
+        if self.smooth is not None:
+            fd = fits.getdata(self.filename)
+            self.fd = gaussian_filter(fd, sigma=self.smooth)
+        else:
+            self.fd = fits.getdata(self.filename)
+
+        self.fd[:, :60] = 0.0
+        self.fd[:, 245:] = 0.0
+        self.fd[:85, :] = 0.0
+        self.fd[160:, :] = 0.0
+
+        x = (
+            (V2 - self.fh["AAXISMIN"])
+            / (self.fh["AAXISMAX"] - self.fh["AAXISMIN"])
+            * self.fh["NAXIS1"]
+        )
+        y = (
+            (V3 - self.fh["BAXISMIN"])
+            / (self.fh["BAXISMAX"] - self.fh["BAXISMIN"])
+            * self.fh["NAXIS2"]
+        )
+
+        xint = np.floor(x).astype(np.int_)
+        yint = np.floor(y).astype(np.int_)
+
+        BM1 = xint < 0
+        BM2 = yint < 0
+        BM3 = xint >= self.fh["NAXIS1"]
+        BM4 = yint >= self.fh["NAXIS2"]
+        BM = BM1 | BM2 | BM3 | BM4
+
+        xint[BM] = 0
+        yint[BM] = 0
+
+        return self.fd[yint, xint]
 
     def get_path(self):
         V2list = self.module_data[self.module][0]
