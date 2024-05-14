@@ -55,7 +55,9 @@ class AptProgram:
     objects to organize data into python objects that can be used for various analyses.
     """
 
-    def __init__(self, sqlfile, angular_step=1.0, usr_defined_obs=None):
+    def __init__(
+        self, sqlfile, angular_step=None, usr_defined_obs=None, usr_defined_angs=None
+    ):
         """
         Parameters
         ----------
@@ -68,6 +70,8 @@ class AptProgram:
 
         usr_defined_obs : list
             List of specific oberservations to load from program
+
+        angles_list : list
         """
 
         self.__sql = AptSqlFile(sqlfile)
@@ -76,6 +80,26 @@ class AptProgram:
 
         self.angular_step = angular_step
         self.usr_defined_obs = usr_defined_obs
+
+        # Users may only want to check a list of specific angles of attitude,
+        # if they provide a list of angles, those are the only angles that are checked.
+        if angular_step and usr_defined_angs:
+            raise Exception(
+                "You defined an angular step that will check all valid angles (0 --> 359.0) \
+                in steps of {angular_step} and usr_defined_angles of {usr_defined_angles} which \
+                only checks for targets at these angles of attitude. Please select which you \
+                prefer, but both options can not be true."
+            )
+        elif self.angular_step:
+            self.angles_list = np.arange(0, 360.0, self.angular_step)
+        elif usr_defined_angs:
+            self.angles_list = usr_defined_angs
+        else:
+            raise Exception(
+                "angular_step and usr_defined_angs are both None. You must pass angular_step \
+                to check for targets in attitude angles (0.0 --> 359.0) in steps of `angular_step` \
+                or a list of individual angles to check `usr_defined_angles` i.e. [20.0, 39.0, 256.0]"
+            )
 
     def __build_observations(self):
         """Convenience method to build Observation objects"""
@@ -88,7 +112,7 @@ class AptProgram:
                 continue
             else:
                 observation = self.observations.data[observation_id]
-                exposure_frames = ExposureFrames(observation, self.angular_step)
+                exposure_frames = ExposureFrames(observation, self.angles_list)
                 self.observations.data[observation_id]["exposure_frames"] = (
                     exposure_frames
                 )
@@ -203,7 +227,7 @@ class Observations:
     def drop_unsupported_observations(self):
         """Convenience method to drop unsupported observation types. This
         method checks all observations including parallels. All metadata
-        is kept and new class attribute `self.supported_observations` is created
+        is kept and new class attribute `self.supported_observations` which is created
         to avoid confusion when processing. `self.supported_observations` are the
         only observation from a program that are analyzed by `jwst_rogue_path_tool`.
         """
@@ -313,20 +337,20 @@ class ExposureFrames:
     order number are a part of the same exposure frame. This object contains
     """
 
-    def __init__(self, observation, angular_step):
+    def __init__(self, observation, attitudes):
         """
         Parameters
         ----------
         observation : dict
             Dictionary containing data from a single observation
 
-        angular_step : float
-            Attitude angle step size used to check if surrounding targets land
-            in susceptibility region
+        attitudes : list like
+            Angles of attitude to check for targets falling in the susceptibility
+            region.
         """
         self.assign_catalog()
         self.observation = observation
-        self.angular_step = angular_step
+        self.attitude_angles = attitudes
         self.observation_number = self.observation["visit"]["observation"][0]
         self.exposure_table = self.observation["exposures"]
         self.template_table = self.observation["nircam_templates"]
@@ -348,7 +372,12 @@ class ExposureFrames:
 
         self.build_exposure_frames_data()
         self.check_in_susceptibility_region()
-        self.get_visibility_windows()
+
+        # For sweeping all angles we will need a angular_step defined.
+        # Else, we have a defined set of angles that are user defined and
+        # do not need windows of visibility calculated.
+        if self.angular_step:
+            self.get_visibility_windows()
 
     def assign_catalog(self, catalog_name="2MASS"):
         """Obtain magnitude selected catalog as pandas dataframe.
@@ -375,7 +404,7 @@ class ExposureFrames:
 
     def build_exposure_frames_data(self):
         """Use exposure table to separate data into exposure frame specific
-        pandas dataframes. Resetting the index to combinations of exposure and 
+        pandas dataframes. Resetting the index to combinations of exposure and
         order number will separate the exposures into exposures associate with
         a specific dither pointing. These tables contain exposures that all
         share the same RA and Dec.
@@ -392,7 +421,7 @@ class ExposureFrames:
             self.data[idx] = exposure_by_order_number.loc[idx, :]
 
     def get_susceptibility_region(self, exposure):
-        """Based on the module of an exposure frame, create a SuceptibilityRegion 
+        """Based on the module of an exposure frame, create a SuceptibilityRegion
         instance.
 
         Parameters
@@ -412,7 +441,7 @@ class ExposureFrames:
         return sus_reg
 
     def get_visibility_windows(self):
-        """Method to calculate when a target has entered/exited a 
+        """Method to calculate when a target has entered/exited a
         susceptibility region.
         """
         self.valid_starts_indices = {}
@@ -461,13 +490,13 @@ class ExposureFrames:
         of `self.angular_step`. This method creates a large dictionary that
         contains contain keys "targets_in" and "targets_loc" for each angle of
         attitude.
-        
+
         For a given angle of attitude, if targets from the catalog fall in the
         susceptibility region, "targets_in" will be True and "targets_loc" are
         the indicies of these stars in the catalog.
 
         When an exposure frame uses both modules, "targets_in" and "targets_loc"
-        are two-dimensional. 
+        are two-dimensional.
 
         ```
                          A      B         A      B          A      B
@@ -485,17 +514,16 @@ class ExposureFrames:
                 self.exposure_data
             )
             attitudes_swept = collections.defaultdict(dict)
-            attitudes = np.arange(0, 360, self.angular_step)
 
             print(
                 "Sweeping angles {} --> {} for Observation: {} and Exposure: {}".format(
-                    min(attitudes), max(attitudes), self.observation_number, idx
+                    min(self.attitude_angles), max(self.attitude_angles), self.observation_number, idx
                 )
             )
 
             # Loop through all of the attitude angles to determine if catalog targets
             # are in the the susceptibility region.
-            for angle in tqdm(attitudes):
+            for angle in tqdm(self.attitude_angles):
                 v2, v3 = self.V2V3_at_one_attitude(ra, dec, angle)
 
                 # If sus_reg is dictionary, both instrument modules were used,
@@ -520,6 +548,12 @@ class ExposureFrames:
                         attitudes_swept[angle]["targets_in"].append(False)
                         attitudes_swept[angle]["targets_loc"].append(in_one)
 
+                # Since we are already getting V2 & V3, use this opportunity to get
+                # claw intensities based on attitude angle.
+                claw_intensity = self.susceptibility_region[key].get_intensity(v2, v3)
+                attitudes_swept[angle]["intensity"] = claw_intensity
+
+            # Store swept angles and values.
             self.swept_angles[idx] = attitudes_swept
 
     def V2V3_at_one_attitude(self, ra_degrees, dec_degrees, v3pa, verbose=False):
@@ -632,37 +666,45 @@ class SusceptibilityRegion:
 
         self.module = module
         self.smooth = smooth
+        self.get_intensity_map()
         self.V2V3path = self.get_path()
 
-    def get_intensity(self, V2, V3):
+    def get_intensity_map(self):
+        """Open intensity map reference file"""
         if self.module == "A":
-            filename = "Rogue path NCA.fits"
+            filename = "rogue_path_nrca.fits"
+        elif self.module == "B":
+            filename = "rogue_path_nrcb.fits"
         else:
-            filename = "Rogue path NCB.fits"
+            ValueError(
+                f"{self.module} IS NOT A VALID MODULE, VALID MODULES ARE 'A' or 'B'"
+            )
 
-        self.filename = "path/to/future/datadir" + filename
-        self.fh = fits.getheader(self.filename)
+        full_file_path = os.path.join(PROJECT_DIRNAME, "data", filename)
+        self.fits_header = fits.getheader(full_file_path)
 
         if self.smooth is not None:
-            fd = fits.getdata(self.filename)
-            self.fd = gaussian_filter(fd, sigma=self.smooth)
+            fits_data = fits.getdata(full_file_path)
+            self.fits_data = gaussian_filter(fits_data, sigma=self.smooth)
         else:
-            self.fd = fits.getdata(self.filename)
+            self.fits_data = fits.getdata(full_file_path)
 
-        self.fd[:, :60] = 0.0
-        self.fd[:, 245:] = 0.0
-        self.fd[:85, :] = 0.0
-        self.fd[160:, :] = 0.0
+    def get_intensity(self, V2, V3):
+        """Calculate the intensity of claw caused by star falling in susceptibility region."""
+        self.fits_data[:, :60] = 0.0
+        self.fits_data[:, 245:] = 0.0
+        self.fits_data[:85, :] = 0.0
+        self.fits_data[160:, :] = 0.0
 
         x = (
-            (V2 - self.fh["AAXISMIN"])
-            / (self.fh["AAXISMAX"] - self.fh["AAXISMIN"])
-            * self.fh["NAXIS1"]
+            (V2 - self.fits_header["AAXISMIN"])
+            / (self.fits_header["AAXISMAX"] - self.fits_header["AAXISMIN"])
+            * self.fits_header["NAXIS1"]
         )
         y = (
-            (V3 - self.fh["BAXISMIN"])
-            / (self.fh["BAXISMAX"] - self.fh["BAXISMIN"])
-            * self.fh["NAXIS2"]
+            (V3 - self.fits_header["BAXISMIN"])
+            / (self.fits_header["BAXISMAX"] - self.fits_header["BAXISMIN"])
+            * self.fits_header["NAXIS2"]
         )
 
         xint = np.floor(x).astype(np.int_)
@@ -670,16 +712,17 @@ class SusceptibilityRegion:
 
         BM1 = xint < 0
         BM2 = yint < 0
-        BM3 = xint >= self.fh["NAXIS1"]
-        BM4 = yint >= self.fh["NAXIS2"]
+        BM3 = xint >= self.fits_header["NAXIS1"]
+        BM4 = yint >= self.fits_header["NAXIS2"]
         BM = BM1 | BM2 | BM3 | BM4
 
         xint[BM] = 0
         yint[BM] = 0
 
-        return self.fd[yint, xint]
+        return self.fits_data[yint, xint]
 
     def get_path(self):
+        """Calculate rogue path for plotting."""
         V2list = self.module_data[self.module][0]
         V3list = self.module_data[self.module][1]
 

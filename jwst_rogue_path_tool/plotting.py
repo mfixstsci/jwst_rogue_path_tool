@@ -13,7 +13,7 @@ Use
 
     >>> from jwst_rogue_path_tool.plotting import create_exposure_plots, create_observation_plots
     >>> from jwst_rogue_path_tool.detect_claws import AptProgram
-    
+
     >>> filename = "/path/to/sql_apt_file.sql"
     >>> program = AptProgram(filename, angular_step=1, usr_defined_obs=[1])
     >>> program.run()
@@ -116,9 +116,9 @@ def create_exposure_plots(observation, ra, dec, **kwargs):
 
 def create_observation_plot(observation, ra, dec, **kwargs):
     """Plot that describe all valid angles at the observation level.
-    The observation level plot is a single plot of all valid angles 
+    The observation level plot is a single plot of all valid angles
     from a set of exposures.
-    
+
     Parameters
     ----------
     ra : float

@@ -17,6 +17,7 @@ Use
 import pandas as pd
 from astropy.table import Table
 
+
 class AptSqlFile:
     """Read and parse SQL file generated from APT"""
 
@@ -46,7 +47,7 @@ class AptSqlFile:
         # numeric like columns from type object to int or float
         data = self.get_aptsql_metadata(tablename)
         df = pd.DataFrame(data)
-        df = df.apply(pd.to_numeric, errors='ignore')
+        df = df.apply(pd.to_numeric, errors="ignore")
 
         # Show table in web browser
         if show_table:
@@ -57,7 +58,7 @@ class AptSqlFile:
 
     def get_aptsql_metadata(self, tablename):
         """Return a list of dictionaries with key/value pairs parsed from sql file.
-        
+
         Parameters
         ----------
         tablename : str
@@ -72,7 +73,9 @@ class AptSqlFile:
                 keystr, valstr = keyval_str.split("values")
                 keys = [k.strip() for k in keystr[2:-2].split(",")]
                 vals = [v.strip() for v in valstr[2:-2].split(",")]
-                vals = [v.replace("'", '') for v in vals]   # Strip out the extra quotes from file that is parsed.
+                vals = [
+                    v.replace("'", "") for v in vals
+                ]  # Strip out the extra quotes from file that is parsed.
                 keyval_dict = dict(zip(keys, vals))
                 rows.append(keyval_dict)
 
