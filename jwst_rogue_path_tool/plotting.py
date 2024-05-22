@@ -26,10 +26,12 @@ Use
 
 import astropy.units as u
 from astropy.coordinates import SkyCoord
+from itertools import chain
 from matplotlib.patches import PathPatch, Wedge
 from matplotlib.path import Path
 import matplotlib.pyplot as plt
 import numpy as np
+import operator
 from pysiaf.utils import rotations
 
 
@@ -254,3 +256,74 @@ def locate_targets_in_annulus(catalog, ra, dec, inner_radius, outer_radius):
     plotting_catalog = catalog[mask]
 
     return plotting_catalog
+
+
+def plot_fixed_angle_regions(observation, angle, savefig=False):
+    program = observation["nircam_templates"]["program"][0]
+    observation_number = observation["nircam_templates"]["observation"][0]
+    susceptibility_region = observation["exposure_frames"].susceptibility_region
+    number_of_modules = len(susceptibility_region)
+    modules_name = observation["nircam_templates"]["modules"][0]
+
+    plt.set_cmap("magma")
+    fig, ax = plt.subplots(number_of_modules, figsize=(15, 15))
+
+    # Hack for the loop below to work with a program that contains
+    # a single module (A or B) or both modules (A and B).
+    try:
+        len(ax)
+    except TypeError:
+        ax = [ax]
+
+    for ax, module in zip(ax, susceptibility_region):
+        centroid = susceptibility_region[module].centroid
+        averages = observation[f"averages_{module}"][angle]
+
+        avg_v2 = averages[f"avg_v2_{module}"]
+        avg_v3 = averages[f"avg_v3_{module}"]
+        avg_intensity = averages[f"avg_intensity_{module}"]
+
+        im = ax.scatter(avg_v2, avg_v3, c=avg_intensity)
+        fig.colorbar(im, ax=ax, label="Intensity")
+
+        # Make box around centroid of centroid of susceptibility region.
+        ax.set_xlim([centroid[0] - 5, centroid[0] + 5])
+        ax.set_ylim([centroid[1] - 5, centroid[1] + 5])
+
+        ax.set_xlabel("V2")
+        ax.set_ylabel("V3")
+        ax.title.set_text(
+            f"Program: {program} Observation: {observation_number} Angle: {angle} Module: {module}"
+        )
+
+        patch = PathPatch(susceptibility_region[module].V2V3path, alpha=0.1)
+        ax.add_patch(patch)
+
+    if savefig:
+        output_filename = f"{program}_{observation_number}_{modules_name}_{angle}.png"
+        plt.savefig(output_filename)
+    else:
+        plt.show()
+
+    plt.close()
+
+
+def plot_flux_vs_v3pa(observation):
+    observation_number = observation["nircam_templates"]["observation"][0]
+
+    flux = observation["flux_vs_angle"]
+
+    fig, axes = plt.subplots(len(flux.keys()), figsize=(15, 10))
+
+    fig.suptitle("Main title")
+
+    for ax, key in zip(axes, flux.keys()):
+        flux_values = flux[key]
+        ax.plot(np.arange(len(flux_values)), flux_values)
+        ax.set_title(key)
+        ax.set_xlabel("V3PA")
+        ax.set_ylabel("DN/pix/ks")
+
+    plt.tight_layout()
+
+    plt.show()

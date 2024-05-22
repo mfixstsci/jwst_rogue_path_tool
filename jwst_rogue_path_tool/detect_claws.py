@@ -25,6 +25,8 @@ Use
 
 import collections
 from copy import deepcopy
+from itertools import chain
+import operator
 import os
 
 from astropy.io import fits
@@ -37,12 +39,10 @@ from tqdm import tqdm
 
 from jwst_rogue_path_tool.apt_sql_parser import AptSqlFile
 from jwst_rogue_path_tool.constants import (
-    CATALOG_BANDPASS,
-    NIRCAM_ZEROPOINTS,
     SUSCEPTIBILITY_REGION_FULL,
     SUSCEPTIBILITY_REGION_SMALL,
-    ZEROPOINT,
 )
+from jwst_rogue_path_tool.fixed_angle import FixedAngle
 from jwst_rogue_path_tool.plotting import create_exposure_plots, create_observation_plot
 
 
@@ -112,10 +112,61 @@ class AptProgram:
                 continue
             else:
                 observation = self.observations.data[observation_id]
-                exposure_frames = ExposureFrames(observation, self.angles_list)
+                exposure_frames = ExposureFrames(
+                    observation, self.angles_list, self.angular_step
+                )
                 self.observations.data[observation_id]["exposure_frames"] = (
                     exposure_frames
                 )
+
+    def __calculate_averages(self):
+        """Convenience method to average out the intensities and positions
+        for an observation.
+        """
+
+        for observation_id in self.observations.observation_number_list:
+            if observation_id in self.observations.unusable_observations:
+                continue
+            else:
+                averages = collections.defaultdict(dict)
+                observation = self.observations.data[observation_id]
+                swept_angles = observation["exposure_frames"].swept_angles
+                exposure_frame_ids = observation["exposure_frames"].data.keys()
+                modules = observation["exposure_frames"].susceptibility_region.keys()
+                for angle in self.angles_list:
+                    for module in modules:
+                        for quantity in ["intensity", "v2", "v3"]:
+                            averages[angle][f"avg_{quantity}_{module}"] = np.mean(
+                                [
+                                    swept_angles[exp_frm][angle][f"{quantity}_{module}"]
+                                    for exp_frm in exposure_frame_ids
+                                ],
+                                axis=0,
+                            )
+                        observation[f"averages_{module}"] = averages
+
+    def __get_flux_vs_angle(self):
+        """Get all flux values as function of angle"""
+        for observation_id in self.observations.observation_number_list:
+            if observation_id in self.observations.unusable_observations:
+                continue
+            else:
+                final_fluxes = collections.defaultdict(dict)
+                observation = self.observations.data[observation_id]
+
+            counts_per_filter = [
+                FixedAngle(observation, angle).total_counts for angle in self.angles_list
+            ]
+
+            flux_keys = list(
+                set(chain.from_iterable(sub.keys() for sub in counts_per_filter))
+            )
+
+            for key in flux_keys:
+                flux_per_key = list(map(operator.itemgetter(key), counts_per_filter))
+                final_fluxes[key] = flux_per_key
+
+            observation["flux_vs_angle"] = final_fluxes
 
     def get_target_information(self):
         """Obtain RA and Dec of target from APT SQL file"""
@@ -164,6 +215,8 @@ class AptProgram:
         self.get_target_information()
         self.__build_observations()
         self.__build_exposure_frames()
+        self.__calculate_averages()
+        self.__get_flux_vs_angle()
 
     def write_report(self, filename, observation):
         """Write "observation level" report given an observation object.
@@ -337,7 +390,7 @@ class ExposureFrames:
     order number are a part of the same exposure frame. This object contains
     """
 
-    def __init__(self, observation, attitudes):
+    def __init__(self, observation, attitudes, angular_step=None):
         """
         Parameters
         ----------
@@ -351,6 +404,7 @@ class ExposureFrames:
         self.assign_catalog()
         self.observation = observation
         self.attitude_angles = attitudes
+        self.angular_step = angular_step
         self.observation_number = self.observation["visit"]["observation"][0]
         self.exposure_table = self.observation["exposures"]
         self.template_table = self.observation["nircam_templates"]
@@ -517,7 +571,10 @@ class ExposureFrames:
 
             print(
                 "Sweeping angles {} --> {} for Observation: {} and Exposure: {}".format(
-                    min(self.attitude_angles), max(self.attitude_angles), self.observation_number, idx
+                    min(self.attitude_angles),
+                    max(self.attitude_angles),
+                    self.observation_number,
+                    idx,
                 )
             )
 
@@ -548,11 +605,14 @@ class ExposureFrames:
                         attitudes_swept[angle]["targets_in"].append(False)
                         attitudes_swept[angle]["targets_loc"].append(in_one)
 
-                # Since we are already getting V2 & V3, use this opportunity to get
-                # claw intensities based on attitude angle.
-                claw_intensity = self.susceptibility_region[key].get_intensity(v2, v3)
-                attitudes_swept[angle]["intensity"] = claw_intensity
-
+                    # Since we are already getting V2 & V3, use this opportunity to get
+                    # claw intensities based on attitude angle.
+                    claw_intensity = self.susceptibility_region[key].get_intensity(
+                        v2, v3
+                    )
+                    attitudes_swept[angle][f"intensity_{key}"] = claw_intensity
+                    attitudes_swept[angle][f"v2_{key}"] = v2
+                    attitudes_swept[angle][f"v3_{key}"] = v3
             # Store swept angles and values.
             self.swept_angles[idx] = attitudes_swept
 
@@ -585,78 +645,6 @@ class ExposureFrames:
         return v2_degrees, v3_degress
 
 
-class FixedAngle:
-    def __init__(self, observation):
-        self.observation = observation
-        self.exposure_frame_object = self.observation["exposure_frames"]
-        self.catalog_name = self.exposure_frame_object.catalog_name
-        self.exposure_frame_table = self.observation.exposure_frame_table
-
-        self.filter_modules_combos = self.exposure_frame_table.groupby(
-            ["filter_short", "modules"]
-        ).size()
-
-        self.total_exposure_duration = self.get_total_exposure_duration()
-        self.get_pupil_from_filter()
-
-    def calculate_absolute_magnitude(self):
-        self.catalog = self.observation.exposure_frame_object.catalog
-        self.bands = CATALOG_BANDPASS[self.catalog_name]
-
-        fict_mag_A, fict_mag_B = {}, {}
-        for band in self.bands:
-            fict_mag_A[band] = (
-                self.catalog[band] - 2.5 * np.log10(avg_intensity_A) + ZEROPOINT
-            )
-            fict_mag_B[band] = (
-                self.catalog[band] - 2.5 * np.log10(avg_intensity_B) + ZEROPOINT
-            )
-
-            fict_mag_A[band].replace(np.inf, 99.0, inplace=True)
-            fict_mag_B[band].replace(np.inf, 99.0, inplace=True)
-
-    def get_total_exposure_duration(self):
-        total_exposure_duration_table = self.exposure_frame_table.groupby(
-            "order_number"
-        ).sum()["photon_collecting_duration"]
-
-        return total_exposure_duration_table
-
-    def get_pupil_from_filter(self):
-        self.unique_pupils = {}
-        for fltr in self.filter_modules_combos["filter_short"]:
-            if "+" in fltr:
-                splt = filter.split("+")
-                pupil = splt[0]
-                filter = splt[1]
-            elif "_" in fltr:
-                splt = filter.split("_")
-                pupil = splt[0]
-                filter = splt[1]
-            else:
-                pupil = "CLEAR"
-
-            self.unique_pupils[filter] = pupil
-
-    def get_empirical_zero_points(self, module, pupil, filter):
-        if module == "A":
-            return NIRCAM_ZEROPOINTS["zeropoints_A"][f"{pupil}+{filter}"]
-        elif module == "B":
-            return NIRCAM_ZEROPOINTS["zeropoints_B"][f"{pupil}+{filter}"]
-        else:
-            assert ValueError(f"module must be value 'A' or 'B' not {module}")
-
-    def get_ground_band(self, pupil, filter, catalog="2MASS"):
-        if catalog == "2MASS":
-            return NIRCAM_ZEROPOINTS["match2MASS"][f"{pupil}+{filter}"]
-        elif catalog == "SIMBAD":
-            return NIRCAM_ZEROPOINTS["matchSIMBAD"][f"{pupil}+{filter}"]
-        else:
-            assert ValueError(
-                f"Catalog must be value '2MASS' or 'SIMBAD' not {catalog}"
-            )
-
-
 class SusceptibilityRegion:
     def __init__(self, module, small=False, smooth=False):
         if small:
@@ -668,6 +656,16 @@ class SusceptibilityRegion:
         self.smooth = smooth
         self.get_intensity_map()
         self.V2V3path = self.get_path()
+        self.calculate_centroid()
+
+    def calculate_centroid(self):
+        """Calculate the centroid of a susceptibility region polygons."""
+        vertices = np.array(self.verts)
+        num_of_vertices = len(vertices)
+        self.centroid = (
+            sum(vertices[:, 0]) / num_of_vertices,
+            sum(vertices[:, 1]) / num_of_vertices,
+        )
 
     def get_intensity_map(self):
         """Open intensity map reference file"""
@@ -728,15 +726,15 @@ class SusceptibilityRegion:
 
         V2list = [-1.0 * v for v in V2list]
 
-        verts = []
+        self.verts = []
 
         for xx, yy in zip(V2list, V3list):
-            verts.append((xx, yy))
-        codes = [Path.MOVETO]
+            self.verts.append((xx, yy))
+        self.codes = [Path.MOVETO]
 
-        for _ in verts[1:-1]:
-            codes.append(Path.LINETO)
+        for _ in self.verts[1:-1]:
+            self.codes.append(Path.LINETO)
 
-        codes.append(Path.CLOSEPOLY)
+        self.codes.append(Path.CLOSEPOLY)
 
-        return Path(verts, codes)
+        return Path(self.verts, self.codes)
