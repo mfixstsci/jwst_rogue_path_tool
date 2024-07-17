@@ -43,11 +43,12 @@ class AptSqlFile:
         show_table : bool
             Show table in web browser.
         """
-        # Obtain metadata, create dataframe, apply to_numeric to convert all
-        # numeric like columns from type object to int or float
+        # Obtain metadata, all data read from sql file are strings.
+        # This changes all non-numerics to nans then uses the nan
+        # values as a way to mask and back fill strings.
         data = self.get_aptsql_metadata(tablename)
         df = pd.DataFrame(data)
-        df = df.apply(pd.to_numeric, errors="ignore")
+        df = df.apply(pd.to_numeric, errors="coerce").fillna(df)
 
         # Show table in web browser
         if show_table:

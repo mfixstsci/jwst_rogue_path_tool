@@ -39,14 +39,13 @@ from tqdm import tqdm
 
 from jwst_rogue_path_tool.apt_sql_parser import AptSqlFile
 from jwst_rogue_path_tool.constants import (
+    PROJECT_DIRNAME,
     SUSCEPTIBILITY_REGION_FULL,
     SUSCEPTIBILITY_REGION_SMALL,
 )
 from jwst_rogue_path_tool.fixed_angle import FixedAngle
 from jwst_rogue_path_tool.plotting import create_exposure_plots, create_observation_plot
-
-
-PROJECT_DIRNAME = os.path.dirname(__file__)
+from jwst_rogue_path_tool.utils import calculate_background, get_pupil_from_filter, get_pivot_wavelength
 
 
 class AptProgram:
@@ -145,8 +144,32 @@ class AptProgram:
                             )
                         observation[f"averages_{module}"] = averages
 
+    def __calculate_background(self):
+        """Calculate background for each observation using JWST Backgrounds Tool"""
+        backgrounds = collections.defaultdict(dict)
+        for observation_id in self.observations.observation_number_list:
+            if observation_id in self.observations.unusable_observations:
+                continue
+            else:
+                observation = self.observations.data[observation_id]
+
+                total_exposure_durations = observation[
+                    "exposure_frames"
+                ].total_exposure_duration_table
+
+                filters = total_exposure_durations.index.values
+                pupils = get_pupil_from_filter(filters)
+
+                for filter, pupil in pupils.items():
+                    pivot_wavelength = get_pivot_wavelength(pupil, filter)
+                    background = calculate_background(self.ra, self.dec, pivot_wavelength)
+                    backgrounds[filter] = background
+ 
+                observation["backgrounds"] = backgrounds
+                    
     def __get_flux_vs_angle(self):
         """Get all flux values as function of angle"""
+
         for observation_id in self.observations.observation_number_list:
             if observation_id in self.observations.unusable_observations:
                 continue
@@ -154,8 +177,15 @@ class AptProgram:
                 final_fluxes = collections.defaultdict(dict)
                 observation = self.observations.data[observation_id]
 
+            total_exposure_durations = observation[
+                "exposure_frames"
+            ].total_exposure_duration_table
+
+            filters = total_exposure_durations.index.values
+
             counts_per_filter = [
-                FixedAngle(observation, angle).total_counts for angle in self.angles_list
+                FixedAngle(observation, angle).total_counts
+                for angle in self.angles_list
             ]
 
             flux_keys = list(
@@ -164,9 +194,19 @@ class AptProgram:
 
             for key in flux_keys:
                 flux_per_key = list(map(operator.itemgetter(key), counts_per_filter))
-                final_fluxes[key] = flux_per_key
+                final_fluxes["total_counts"][key] = np.array(flux_per_key)
 
-            observation["flux_vs_angle"] = final_fluxes
+                for filter in filters:
+                    if filter in key:
+                        pix_dn_ks = (
+                            final_fluxes["total_counts"][key]
+                            * 1000
+                            / total_exposure_durations[filter]
+                        )
+                        flux_key = key.replace("total_counts", "dn_pix_ks")
+                        final_fluxes["dn_pix_ks"][flux_key] = pix_dn_ks
+
+            observation["flux"] = final_fluxes
 
     def get_target_information(self):
         """Obtain RA and Dec of target from APT SQL file"""
@@ -217,6 +257,7 @@ class AptProgram:
         self.__build_exposure_frames()
         self.__calculate_averages()
         self.__get_flux_vs_angle()
+        self.__calculate_background()
 
     def write_report(self, filename, observation):
         """Write "observation level" report given an observation object.
@@ -424,6 +465,7 @@ class ExposureFrames:
             how="left",
         ).set_index(self.module_by_exposure.index)
 
+        self.get_total_exposure_duration()
         self.build_exposure_frames_data()
         self.check_in_susceptibility_region()
 
@@ -474,6 +516,13 @@ class ExposureFrames:
         for idx in dither_pointings:
             self.data[idx] = exposure_by_order_number.loc[idx, :]
 
+    def get_total_exposure_duration(self):
+        total_exposure_duration_table = self.exposure_frame_table.groupby(
+            "filter_short"
+        ).sum()["photon_collecting_duration"]
+
+        self.total_exposure_duration_table = total_exposure_duration_table
+
     def get_susceptibility_region(self, exposure):
         """Based on the module of an exposure frame, create a SuceptibilityRegion
         instance.
@@ -485,12 +534,12 @@ class ExposureFrames:
         """
         sus_reg = {}
         if exposure["modules"] == "ALL" or exposure["modules"] == "BOTH":
-            sus_reg["A"] = SusceptibilityRegion(module="A")
-            sus_reg["B"] = SusceptibilityRegion(module="B")
+            sus_reg["A"] = SusceptibilityRegion(module="A", smooth=5)
+            sus_reg["B"] = SusceptibilityRegion(module="B", smooth=5)
         elif exposure["modules"] == "A":
-            sus_reg["A"] = SusceptibilityRegion(module=exposure["modules"])
+            sus_reg["A"] = SusceptibilityRegion(module=exposure["modules"], smooth=5)
         elif exposure["modules"] == "B":
-            sus_reg["B"] = SusceptibilityRegion(module=exposure["modules"])
+            sus_reg["B"] = SusceptibilityRegion(module=exposure["modules"], smooth=5)
 
         return sus_reg
 

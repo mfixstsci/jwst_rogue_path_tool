@@ -33,8 +33,9 @@ from jwst_rogue_path_tool.constants import (
 )
 
 from jwst_rogue_path_tool.plotting import plot_fixed_angle_regions
-from jwst_rogue_path_tool.utils import absolute_magnitude
+from jwst_rogue_path_tool.utils import absolute_magnitude, get_pupil_from_filter
 
+np.seterr(divide='ignore') # For np.log10 divide by 0
 
 class FixedAngle:
     def __init__(self, observation, angle):
@@ -56,8 +57,12 @@ class FixedAngle:
             ["filter_short", "modules"]
         ).size()
 
-        self.total_exposure_duration = self.get_total_exposure_duration()
-        self.get_pupil_from_filter()
+        self.total_exposure_duration_table = self.observation[
+            "exposure_frames"
+        ].total_exposure_duration_table
+
+        self.filters = self.total_exposure_duration_table.index.values
+        self.pupils = get_pupil_from_filter(self.filters)
         self.calculate_absolute_magnitude()
         self.get_total_magnitudes()
         self.get_total_counts()
@@ -70,7 +75,7 @@ class FixedAngle:
                 ]
                 abs_magnitude = (
                     self.catalog[band]
-                    - absolute_magnitude(average_intensity)
+                    + absolute_magnitude(average_intensity)
                     + ZEROPOINT
                 )
 
@@ -78,33 +83,6 @@ class FixedAngle:
                 abs_magnitude.replace(-np.inf, np.nan, inplace=True)
 
                 self.catalog[f"abs_mag_{band}_{module}"] = abs_magnitude
-
-    def get_total_exposure_duration(self):
-        total_exposure_duration_table = self.exposure_frame_table.groupby(
-            "filter_short"
-        ).sum()["photon_collecting_duration"]
-
-        return total_exposure_duration_table
-
-    def get_pupil_from_filter(self):
-        self.pupils = {}
-        self.filters = list(
-            map(operator.itemgetter(0), self.filter_modules_combos.index.to_list())
-        )
-        for fltr in self.filters:
-            if "+" in fltr:
-                splt = filter.split("+")
-                pupil = splt[0]
-                filter = splt[1]
-            elif "_" in fltr:
-                splt = filter.split("_")
-                pupil = splt[0]
-                filter = splt[1]
-            else:
-                pupil = "CLEAR"
-                filter = fltr
-
-            self.pupils[filter] = pupil
 
     def get_empirical_zero_points(self, module, pupil, filter):
         if module == "A":
@@ -141,7 +119,7 @@ class FixedAngle:
                     f"total_mag_{ground_band}_{module}"
                 ]
 
-                total_exposure_duration = self.total_exposure_duration[filter]
+                total_exposure_duration = self.total_exposure_duration_table[filter]
                 tot_cnts = (
                     10 ** ((emperical_zeropoint - summed_abs_mag) / 2.5)
                     * total_exposure_duration

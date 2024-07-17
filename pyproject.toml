@@ -12,6 +12,7 @@ requires-python = ">=3.9"
 dependencies = [
     "astropy>=5.3.1",
     "jupyter>=1.0.0",
+    "jwst_backgrounds>=1.2.0",
     "matplotlib>=3.7.2",
     "numpy>=1.25.1",
     "pandas>=2.0.3",

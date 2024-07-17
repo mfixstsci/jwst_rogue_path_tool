@@ -287,8 +287,8 @@ def plot_fixed_angle_regions(observation, angle, savefig=False):
         fig.colorbar(im, ax=ax, label="Intensity")
 
         # Make box around centroid of centroid of susceptibility region.
-        ax.set_xlim([centroid[0] - 5, centroid[0] + 5])
-        ax.set_ylim([centroid[1] - 5, centroid[1] + 5])
+        ax.set_xlim([centroid[0] - 3, centroid[0] + 3])
+        ax.set_ylim([centroid[1] - 3, centroid[1] + 3])
 
         ax.set_xlabel("V2")
         ax.set_ylabel("V3")
@@ -310,20 +310,31 @@ def plot_fixed_angle_regions(observation, angle, savefig=False):
 
 def plot_flux_vs_v3pa(observation):
     observation_number = observation["nircam_templates"]["observation"][0]
+    program_id = observation['visit']['program'][0]
+    susceptibility_regions = observation["exposure_frames"].susceptibility_region
+    modules = susceptibility_regions.keys()
 
-    flux = observation["flux_vs_angle"]
+    flux = observation["flux"]["dn_pix_ks"]
+    backgrounds = observation["backgrounds"]
 
-    fig, axes = plt.subplots(len(flux.keys()), figsize=(15, 10))
+    fig, axes = plt.subplots(
+        len(flux.keys()), len(modules), figsize=(15, 10), sharex=True, sharey=True, squeeze=False
+    )
 
-    fig.suptitle("Main title")
+    fig.suptitle(f"Program: {program_id} Observation: {observation_number}")
 
-    for ax, key in zip(axes, flux.keys()):
-        flux_values = flux[key]
-        ax.plot(np.arange(len(flux_values)), flux_values)
-        ax.set_title(key)
-        ax.set_xlabel("V3PA")
-        ax.set_ylabel("DN/pix/ks")
+    for mod, module in enumerate(modules):
+        for band, fluxes in enumerate(flux.keys()):
+            flux_values = flux[fluxes]
+            axes[band, mod].plot(np.arange(len(flux_values)), flux_values)
 
-    plt.tight_layout()
+            axes[band, mod].set_yscale("log")
+            axes[band, mod].set_xlabel("V3PA")
+            axes[band, mod].set_ylabel("DN/pix/ks")
+            axes[band, mod].set_ylim(0.005, 500)
 
-    plt.show()
+    axes[0, 0].set_xlim(0, 360)
+
+    fig.tight_layout()
+    plt.show(fig)
+    plt.close(fig)

@@ -19,6 +19,9 @@ Use
 """
 
 import numpy as np
+import os
+
+PROJECT_DIRNAME = os.path.dirname(__file__)
 
 SUSCEPTIBILITY_REGION_FULL = {
     "A": np.array(
