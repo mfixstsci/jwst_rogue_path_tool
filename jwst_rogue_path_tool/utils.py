@@ -1,15 +1,54 @@
-from functools import reduce
-from itertools import groupby
-
+from jwst_backgrounds import jbt
 import numpy as np
+import os
+import pandas as pd
+
+from jwst_rogue_path_tool.constants import PROJECT_DIRNAME
 
 
-def get_valid_angles_windows(angles):
-    change = np.where(angles[:-1] != angles[1:])[0]
-    if change.size >0:
-        if angles[change[0]]:
-            change = np.roll(change,1)
-            window_start = angles[change[::2]]
-            window_end = angles[change[1::2]]
+def absolute_magnitude(band_magnitude):
+    absolute_magnitude = -2.5 * np.log10(band_magnitude)
+    return absolute_magnitude
 
-    return window_start, window_end
+
+def calculate_background(ra, dec, wavelength):
+    background_data = jbt.background(ra, dec, wavelength)
+    return background_data
+
+def check_background_limits(background, counts, total_exposure_duration, function=np.min, threshold=0.1):
+    print("developing")
+    
+
+def get_pupil_from_filter(filters):
+    pupils = {}
+    
+    for fltr in filters:
+        if "+" in fltr:
+            splt = filter.split("+")
+            pupil = splt[0]
+            filter = splt[1]
+        elif "_" in fltr:
+            splt = filter.split("_")
+            pupil = splt[0]
+            filter = splt[1]
+        else:
+            pupil = "CLEAR"
+            filter = fltr
+        
+        pupils[filter] = pupil
+    
+    return pupils
+
+def get_pivot_wavelength(pupilshort, filtershort):
+    filter_filename = os.path.join(PROJECT_DIRNAME, "data", "filter_data.txt")
+
+    filter_table = pd.read_csv(filter_filename, sep="\s+")
+
+    if pupilshort == "CLEAR":
+        check_value = filtershort
+    else:
+        check_value = pupilshort
+
+    BM = filter_table["Filter"] == check_value
+
+    return filter_table.loc[BM, "Pivot"].values[0]
