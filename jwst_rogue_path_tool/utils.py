@@ -11,17 +11,14 @@ def absolute_magnitude(band_magnitude):
     return absolute_magnitude
 
 
-def calculate_background(ra, dec, wavelength):
-    background_data = jbt.background(ra, dec, wavelength)
+def calculate_background(ra, dec, wavelength, threshold):
+    background_data = jbt.background(ra, dec, wavelength=wavelength, thresh=threshold)
     return background_data
 
-def check_background_limits(background, counts, total_exposure_duration, function=np.min, threshold=0.1):
-    print("developing")
-    
 
 def get_pupil_from_filter(filters):
     pupils = {}
-    
+
     for fltr in filters:
         if "+" in fltr:
             splt = filter.split("+")
@@ -34,10 +31,11 @@ def get_pupil_from_filter(filters):
         else:
             pupil = "CLEAR"
             filter = fltr
-        
+
         pupils[filter] = pupil
-    
+
     return pupils
+
 
 def get_pivot_wavelength(pupilshort, filtershort):
     filter_filename = os.path.join(PROJECT_DIRNAME, "data", "filter_data.txt")
