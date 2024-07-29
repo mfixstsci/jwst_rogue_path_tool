@@ -35,7 +35,8 @@ from jwst_rogue_path_tool.constants import (
 from jwst_rogue_path_tool.plotting import plot_fixed_angle_regions
 from jwst_rogue_path_tool.utils import absolute_magnitude, get_pupil_from_filter
 
-np.seterr(divide='ignore') # For np.log10 divide by 0
+np.seterr(divide="ignore")  # For np.log10 divide by 0
+
 
 class FixedAngle:
     def __init__(self, observation, angle):
@@ -125,9 +126,7 @@ class FixedAngle:
                     * total_exposure_duration
                 )
 
-                self.total_counts[
-                    f"total_counts_{pupil}+{filter}_{module}"
-                ] = tot_cnts
+                self.total_counts[f"total_counts_{pupil}+{filter}_{module}"] = tot_cnts
 
     def get_total_magnitudes(self):
         self.total_magnitudes = {}

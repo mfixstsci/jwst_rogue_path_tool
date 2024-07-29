@@ -15,6 +15,7 @@ def calculate_background(ra, dec, wavelength, threshold):
     background_data = jbt.background(ra, dec, wavelength=wavelength, thresh=threshold)
     return background_data
 
+
 def get_pupil_from_filter(filters):
     pupils = {}
 

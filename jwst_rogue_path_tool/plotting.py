@@ -303,7 +303,7 @@ def plot_fixed_angle_regions(observation, angle, savefig=False):
 
 def plot_flux_vs_v3pa(observation, fontsize=20):
     observation_number = observation["nircam_templates"]["observation"].values[0]
-    program_id = observation['visit']['program'].values[0]
+    program_id = observation["visit"]["program"].values[0]
     susceptibility_regions = observation["exposure_frames"].susceptibility_region
     modules = susceptibility_regions.keys()
     filters = observation["filters"]
@@ -312,10 +312,15 @@ def plot_flux_vs_v3pa(observation, fontsize=20):
     flux = observation["flux"]["dn_pix_ks"]
     flux_boolean = observation["flux_boolean"]
 
-    colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+    colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
 
     fig, axes = plt.subplots(
-        len(filters), len(modules), figsize=(15, 10), sharex=True, sharey=True, squeeze=False
+        len(filters),
+        len(modules),
+        figsize=(15, 10),
+        sharex=True,
+        sharey=True,
+        squeeze=False,
     )
 
     # Assign module name to columns of plots.
@@ -323,7 +328,9 @@ def plot_flux_vs_v3pa(observation, fontsize=20):
     for ax, col in zip(axes[0], column_names):
         ax.set_title(col, fontsize=fontsize)
 
-    fig.suptitle(f"Program: {program_id} Observation: {observation_number}", fontsize=fontsize)
+    fig.suptitle(
+        f"Program: {program_id} Observation: {observation_number}", fontsize=fontsize
+    )
 
     for mod, module in enumerate(modules):
         for fltr, filter in enumerate(filters):
@@ -333,17 +340,26 @@ def plot_flux_vs_v3pa(observation, fontsize=20):
             above_threshold = np.copy(flux_values)
 
             for color_idx, key in enumerate(flux_boolean[f"{filter}_{module}"].keys()):
-                stats_function, lam_threshold, bkg_threshold= key.split("_")
-                above_threshold[flux_boolean[f"flux_boolean_{stats_function}_{module}"]] = np.nan
+                stats_function, lam_threshold, bkg_threshold = key.split("_")
+                above_threshold[
+                    flux_boolean[f"flux_boolean_{stats_function}_{module}"]
+                ] = np.nan
                 label_str = f"{eval(bkg_threshold):.1f} x {stats_function} = {eval(lam_threshold):.1f} DN/pix/ks"
-                axes[fltr, mod].plot(above_threshold, c=colors[color_idx+1])
-                axes[fltr, mod].axhline(eval(lam_threshold), c=colors[color_idx+1], ls= '--', label=label_str)
+                axes[fltr, mod].plot(above_threshold, c=colors[color_idx + 1])
+                axes[fltr, mod].axhline(
+                    eval(lam_threshold),
+                    c=colors[color_idx + 1],
+                    ls="--",
+                    label=label_str,
+                )
 
             axes[fltr, mod].set_yscale("log")
             axes[fltr, mod].set_xlabel("V3PA", fontsize=fontsize)
             axes[fltr, mod].set_ylabel(f"DN/pix/ks ({filter})", fontsize=fontsize)
             axes[fltr, mod].set_ylim(0.005, 500)
-            axes[fltr, mod].legend(loc="lower right", fontsize=fontsize-(fontsize/4))
+            axes[fltr, mod].legend(
+                loc="lower right", fontsize=fontsize - (fontsize / 4)
+            )
 
     axes[0, 0].set_xlim(0, 360)
 

@@ -64,7 +64,7 @@ class AptProgram:
         angular_step=None,
         usr_defined_obs=None,
         usr_defined_angs=None,
-        bkg_params=[{'threshold':0.1,'function':np.min}]
+        bkg_params=[{"threshold": 0.1, "function": np.min}],
     ):
         """
         Parameters
@@ -172,7 +172,6 @@ class AptProgram:
             observation["filters"] = filters
             observation["pupils"] = get_pupil_from_filter(filters)
 
-
             counts_per_filter = [
                 FixedAngle(observation, angle).total_counts
                 for angle in self.angles_list
@@ -199,17 +198,18 @@ class AptProgram:
             observation["flux"] = final_fluxes
 
     def __find_background_thresholds(self):
-        """Find fluxes that are higher than threshold values.
-        """
+        """Find fluxes that are higher than threshold values."""
         print("... Calculating backgrounds and thresholds ...")
         for observation_id in self.observations.observation_number_list:
             if observation_id in self.observations.unusable_observations:
                 continue
             else:
                 observation = self.observations.data[observation_id]
-                susceptibility_regions = observation["exposure_frames"].susceptibility_region
+                susceptibility_regions = observation[
+                    "exposure_frames"
+                ].susceptibility_region
                 modules = susceptibility_regions.keys()
-                fluxes = observation["flux"]["dn_pix_ks"] # Get flux dictionary
+                fluxes = observation["flux"]["dn_pix_ks"]  # Get flux dictionary
 
                 flux_boolean = collections.defaultdict(dict)
                 for parameters in self.bkg_parameters:
@@ -220,27 +220,38 @@ class AptProgram:
                     for module in modules:
                         for filter, pupil in observation["pupils"].items():
                             pivot_wavelength = get_pivot_wavelength(pupil, filter)
-                            background = calculate_background(self.ra, self.dec, pivot_wavelength, threshold)
+                            background = calculate_background(
+                                self.ra, self.dec, pivot_wavelength, threshold
+                            )
 
-                            wavelengths = background.bathtub['total_thiswave']
+                            wavelengths = background.bathtub["total_thiswave"]
                             pivot_wavelength = get_pivot_wavelength(pupil, filter)
-                            lam_thresh = threshold * statistic_function(wavelengths)/pivot_wavelength*1000.0
+                            lam_thresh = (
+                                threshold
+                                * statistic_function(wavelengths)
+                                / pivot_wavelength
+                                * 1000.0
+                            )
 
                             flux_key = f"dn_pix_ks_{pupil}+{filter}_{module}"
-                            
+
                             flux_above_limit = np.copy(fluxes[flux_key])
-                            limit_indices =  flux_above_limit < lam_thresh
+                            limit_indices = flux_above_limit < lam_thresh
 
                             flux_boolean_key = f"{filter}_{module}"
                             statistics_key = f"{statistic_function.__name__}_{lam_thresh}_{threshold}"
-                            flux_boolean[flux_boolean_key][statistics_key] = limit_indices
+                            flux_boolean[flux_boolean_key][statistics_key] = (
+                                limit_indices
+                            )
 
                             above_threshold.append(limit_indices)
 
                         # Convert list to an array and then see where all indices are true
                         # for each filter/pupil combination.
                         all_boolean = np.array(above_threshold).all(0)
-                        module_boolean_key = f"flux_boolean_{statistic_function.__name__}_{module}"
+                        module_boolean_key = (
+                            f"flux_boolean_{statistic_function.__name__}_{module}"
+                        )
                         flux_boolean[module_boolean_key] = all_boolean
 
             observation["flux_boolean"] = flux_boolean
