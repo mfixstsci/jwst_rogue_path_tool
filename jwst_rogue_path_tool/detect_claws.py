@@ -45,7 +45,11 @@ from jwst_rogue_path_tool.constants import (
 )
 from jwst_rogue_path_tool.fixed_angle import FixedAngle
 from jwst_rogue_path_tool.plotting import create_exposure_plots, create_observation_plot
-from jwst_rogue_path_tool.utils import calculate_background, get_pupil_from_filter, get_pivot_wavelength
+from jwst_rogue_path_tool.utils import (
+    calculate_background,
+    get_pupil_from_filter,
+    get_pivot_wavelength,
+)
 
 
 class AptProgram:
@@ -55,7 +59,12 @@ class AptProgram:
     """
 
     def __init__(
-        self, sqlfile, angular_step=None, usr_defined_obs=None, usr_defined_angs=None
+        self,
+        sqlfile,
+        angular_step=None,
+        usr_defined_obs=None,
+        usr_defined_angs=None,
+        bkg_params=[{'threshold':0.1,'function':np.min}]
     ):
         """
         Parameters
@@ -99,6 +108,7 @@ class AptProgram:
                 to check for targets in attitude angles (0.0 --> 359.0) in steps of `angular_step` \
                 or a list of individual angles to check `usr_defined_angles` i.e. [20.0, 39.0, 256.0]"
             )
+        self.bkg_parameters = bkg_params
 
     def __build_observations(self):
         """Convenience method to build Observation objects"""
@@ -122,7 +132,7 @@ class AptProgram:
         """Convenience method to average out the intensities and positions
         for an observation.
         """
-
+        print("... Averaging intensities per angle ...")
         for observation_id in self.observations.observation_number_list:
             if observation_id in self.observations.unusable_observations:
                 continue
@@ -144,32 +154,9 @@ class AptProgram:
                             )
                         observation[f"averages_{module}"] = averages
 
-    def __calculate_background(self):
-        """Calculate background for each observation using JWST Backgrounds Tool"""
-        backgrounds = collections.defaultdict(dict)
-        for observation_id in self.observations.observation_number_list:
-            if observation_id in self.observations.unusable_observations:
-                continue
-            else:
-                observation = self.observations.data[observation_id]
-
-                total_exposure_durations = observation[
-                    "exposure_frames"
-                ].total_exposure_duration_table
-
-                filters = total_exposure_durations.index.values
-                pupils = get_pupil_from_filter(filters)
-
-                for filter, pupil in pupils.items():
-                    pivot_wavelength = get_pivot_wavelength(pupil, filter)
-                    background = calculate_background(self.ra, self.dec, pivot_wavelength)
-                    backgrounds[filter] = background
- 
-                observation["backgrounds"] = backgrounds
-                    
     def __get_flux_vs_angle(self):
         """Get all flux values as function of angle"""
-
+        print("... Calculating flux values ...")
         for observation_id in self.observations.observation_number_list:
             if observation_id in self.observations.unusable_observations:
                 continue
@@ -182,6 +169,9 @@ class AptProgram:
             ].total_exposure_duration_table
 
             filters = total_exposure_durations.index.values
+            observation["filters"] = filters
+            observation["pupils"] = get_pupil_from_filter(filters)
+
 
             counts_per_filter = [
                 FixedAngle(observation, angle).total_counts
@@ -208,6 +198,53 @@ class AptProgram:
 
             observation["flux"] = final_fluxes
 
+    def __find_background_thresholds(self):
+        """Find fluxes that are higher than threshold values.
+        """
+        print("... Calculating backgrounds and thresholds ...")
+        for observation_id in self.observations.observation_number_list:
+            if observation_id in self.observations.unusable_observations:
+                continue
+            else:
+                observation = self.observations.data[observation_id]
+                susceptibility_regions = observation["exposure_frames"].susceptibility_region
+                modules = susceptibility_regions.keys()
+                fluxes = observation["flux"]["dn_pix_ks"] # Get flux dictionary
+
+                flux_boolean = collections.defaultdict(dict)
+                for parameters in self.bkg_parameters:
+                    above_threshold = []
+                    threshold = parameters["threshold"]
+                    statistic_function = parameters["function"]
+                    # Calculate the background for each filter/pupil combination
+                    for module in modules:
+                        for filter, pupil in observation["pupils"].items():
+                            pivot_wavelength = get_pivot_wavelength(pupil, filter)
+                            background = calculate_background(self.ra, self.dec, pivot_wavelength, threshold)
+
+                            wavelengths = background.bathtub['total_thiswave']
+                            pivot_wavelength = get_pivot_wavelength(pupil, filter)
+                            lam_thresh = threshold * statistic_function(wavelengths)/pivot_wavelength*1000.0
+
+                            flux_key = f"dn_pix_ks_{pupil}+{filter}_{module}"
+                            
+                            flux_above_limit = np.copy(fluxes[flux_key])
+                            limit_indices =  flux_above_limit < lam_thresh
+
+                            flux_boolean_key = f"{filter}_{module}"
+                            statistics_key = f"{statistic_function.__name__}_{lam_thresh}_{threshold}"
+                            flux_boolean[flux_boolean_key][statistics_key] = limit_indices
+
+                            above_threshold.append(limit_indices)
+
+                        # Convert list to an array and then see where all indices are true
+                        # for each filter/pupil combination.
+                        all_boolean = np.array(above_threshold).all(0)
+                        module_boolean_key = f"flux_boolean_{statistic_function.__name__}_{module}"
+                        flux_boolean[module_boolean_key] = all_boolean
+
+            observation["flux_boolean"] = flux_boolean
+
     def get_target_information(self):
         """Obtain RA and Dec of target from APT SQL file"""
         target_info = self.__sql.build_aptsql_dataframe("fixed_target")
@@ -215,7 +252,7 @@ class AptProgram:
         self.ra = target_info["ra_computed"][0]
         self.dec = target_info["dec_computed"][0]
 
-    def plot_exposures(self, observation_id):
+    def plot_exposures(self, observation):
         """Create plot for individual exposures for a given observation. Plot
         will contain targets defined in a specific inner and outer radius
         defined by user. Check `jwst_rogue_path_tool.plotting.create_exposure_plots`
@@ -226,13 +263,9 @@ class AptProgram:
         observation_id : int
             Observation id number to generate figures from.
         """
-        if observation_id not in self.observations.data.keys():
-            raise KeyError(f"{observation_id} IS NOT A VALID OBSERVATION ID")
-        else:
-            observation = self.observations.data[observation_id]
-            create_exposure_plots(observation, self.ra, self.dec)
+        create_exposure_plots(observation, self.ra, self.dec)
 
-    def plot_observation(self, observation_id):
+    def plot_observation(self, observation):
         """Create plot at the observation level. The "observation level" is
         defined as all of the valid angles from each exposure combined. Plot
         will contain targets defined in a specific inner and outer radius
@@ -244,11 +277,7 @@ class AptProgram:
         observation_id : int
             Observation id number to generate figures from.
         """
-        if observation_id not in self.observations.data.keys():
-            raise KeyError(f"{observation_id} IS NOT A VALID OBSERVATION ID")
-        else:
-            observation = self.observations.data[observation_id]
-            create_observation_plot(observation, self.ra, self.dec)
+        create_observation_plot(observation, self.ra, self.dec)
 
     def run(self):
         """Convenience method to build AptProgram"""
@@ -257,7 +286,7 @@ class AptProgram:
         self.__build_exposure_frames()
         self.__calculate_averages()
         self.__get_flux_vs_angle()
-        self.__calculate_background()
+        self.__find_background_thresholds()
 
     def write_report(self, filename, observation):
         """Write "observation level" report given an observation object.
@@ -446,7 +475,7 @@ class ExposureFrames:
         self.observation = observation
         self.attitude_angles = attitudes
         self.angular_step = angular_step
-        self.observation_number = self.observation["visit"]["observation"][0]
+        self.observation_number = self.observation["visit"]["observation"].values[0]
         self.exposure_table = self.observation["exposures"]
         self.template_table = self.observation["nircam_templates"]
         self.nrc_exposure_specification_table = self.observation[

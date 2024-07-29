@@ -126,7 +126,7 @@ class FixedAngle:
                 )
 
                 self.total_counts[
-                    f"total_counts_{pupil}+{filter}_to_{ground_band}_{module}"
+                    f"total_counts_{pupil}+{filter}_{module}"
                 ] = tot_cnts
 
     def get_total_magnitudes(self):

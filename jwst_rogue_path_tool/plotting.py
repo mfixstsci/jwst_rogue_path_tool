@@ -12,26 +12,21 @@ Use
     Routines in this module can be imported as follows:
 
     >>> from jwst_rogue_path_tool.plotting import create_exposure_plots, create_observation_plots
-    >>> from jwst_rogue_path_tool.detect_claws import AptProgram
-
-    >>> filename = "/path/to/sql_apt_file.sql"
-    >>> program = AptProgram(filename, angular_step=1, usr_defined_obs=[1])
-    >>> program.run()
-
+    >>> from jwst_rogue_path_tool.plotting import plot_fixed_angle_regions, plot_flux_vs_v3pa
     >>> observation = program.observations.data[1]  # get obs_id 1 from program
     >>> ra, dec = program.ra, program.dec
     >>> create_exposure_plots(observation, ra, dec)
     >>> create_observation_plot(observation, ra, dec)
+    >>> plot_fixed_angle_regions(observation, 250)
+    >>> plot_flux_vs_v3pa(observation)
 """
 
 import astropy.units as u
 from astropy.coordinates import SkyCoord
-from itertools import chain
 from matplotlib.patches import PathPatch, Wedge
 from matplotlib.path import Path
 import matplotlib.pyplot as plt
 import numpy as np
-import operator
 from pysiaf.utils import rotations
 
 
@@ -67,15 +62,11 @@ def create_exposure_plots(observation, ra, dec, **kwargs):
         catalog, ra, dec, inner_radius, outer_radius
     )
 
-    obs_id = observation["visit"]["observation"][0]
+    obs_id = observation["visit"]["observation"].values[0]
 
     for n, exp_num in enumerate(exposure_frames_data):
         angle_start = exposure_frames.valid_starts_angles[exp_num]
         angle_end = exposure_frames.valid_ends_angles[exp_num]
-
-        # Some exposures will have no valid/consecutive angles.
-        # if not angle_start or angle_end:
-        #     continue
 
         ax = plt.subplot(nrows, ncols, n + 1)
         ax.set_xlabel("RA [Degrees]")
@@ -113,7 +104,6 @@ def create_exposure_plots(observation, ra, dec, **kwargs):
                 ax.add_patch(patch)
 
     plt.tight_layout()
-    plt.savefig("output.png")
 
 
 def create_observation_plot(observation, ra, dec, **kwargs):
@@ -142,6 +132,9 @@ def create_observation_plot(observation, ra, dec, **kwargs):
     exposure_frames = observation["exposure_frames"]
     exposure_frames_data = exposure_frames.data
 
+    observation_number = observation["nircam_templates"]["observation"].values[0]
+    program = observation["nircam_templates"]["program"].values[0]
+
     catalog = exposure_frames.catalog
     plotting_catalog = locate_targets_in_annulus(
         catalog, ra, dec, inner_radius, outer_radius
@@ -160,7 +153,7 @@ def create_observation_plot(observation, ra, dec, **kwargs):
     ax = plt.subplot()
     ax.set_xlabel("RA [Degrees]")
     ax.set_ylabel("DEC [Degrees]")
-    ax.set_title("Observation Level Plot")
+    ax.set_title(f"Program {program} Observation {observation_number}")
     ax.scatter(ra, dec, marker="X", c="red")
     ax.scatter(plotting_catalog["ra"], plotting_catalog["dec"], c="deeppink")
 
@@ -195,7 +188,7 @@ def get_susceptibility_region_patch(exposure_frames, exposure_id):
     """
     patches = []
 
-    region = exposure_frames.susceptibilty_region
+    region = exposure_frames.susceptibility_region
 
     for key in region:
         module = region[key]
@@ -259,11 +252,11 @@ def locate_targets_in_annulus(catalog, ra, dec, inner_radius, outer_radius):
 
 
 def plot_fixed_angle_regions(observation, angle, savefig=False):
-    program = observation["nircam_templates"]["program"][0]
-    observation_number = observation["nircam_templates"]["observation"][0]
+    program = observation["nircam_templates"]["program"].values[0]
+    observation_number = observation["nircam_templates"]["observation"].values[0]
     susceptibility_region = observation["exposure_frames"].susceptibility_region
     number_of_modules = len(susceptibility_region)
-    modules_name = observation["nircam_templates"]["modules"][0]
+    modules_name = observation["nircam_templates"]["modules"].values[0]
 
     plt.set_cmap("magma")
     fig, ax = plt.subplots(number_of_modules, figsize=(15, 15))
@@ -308,30 +301,49 @@ def plot_fixed_angle_regions(observation, angle, savefig=False):
     plt.close()
 
 
-def plot_flux_vs_v3pa(observation):
-    observation_number = observation["nircam_templates"]["observation"][0]
-    program_id = observation['visit']['program'][0]
+def plot_flux_vs_v3pa(observation, fontsize=20):
+    observation_number = observation["nircam_templates"]["observation"].values[0]
+    program_id = observation['visit']['program'].values[0]
     susceptibility_regions = observation["exposure_frames"].susceptibility_region
     modules = susceptibility_regions.keys()
+    filters = observation["filters"]
+    pupils = observation["pupils"]
 
     flux = observation["flux"]["dn_pix_ks"]
-    backgrounds = observation["backgrounds"]
+    flux_boolean = observation["flux_boolean"]
+
+    colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
 
     fig, axes = plt.subplots(
-        len(flux.keys()), len(modules), figsize=(15, 10), sharex=True, sharey=True, squeeze=False
+        len(filters), len(modules), figsize=(15, 10), sharex=True, sharey=True, squeeze=False
     )
 
-    fig.suptitle(f"Program: {program_id} Observation: {observation_number}")
+    # Assign module name to columns of plots.
+    column_names = [f"Module: {module}" for module in modules]
+    for ax, col in zip(axes[0], column_names):
+        ax.set_title(col, fontsize=fontsize)
+
+    fig.suptitle(f"Program: {program_id} Observation: {observation_number}", fontsize=fontsize)
 
     for mod, module in enumerate(modules):
-        for band, fluxes in enumerate(flux.keys()):
-            flux_values = flux[fluxes]
-            axes[band, mod].plot(np.arange(len(flux_values)), flux_values)
+        for fltr, filter in enumerate(filters):
+            flux_key = f"dn_pix_ks_{pupils[filter]}+{filter}_{module}"
+            flux_values = flux[flux_key]
+            axes[fltr, mod].plot(flux_values)
+            above_threshold = np.copy(flux_values)
 
-            axes[band, mod].set_yscale("log")
-            axes[band, mod].set_xlabel("V3PA")
-            axes[band, mod].set_ylabel("DN/pix/ks")
-            axes[band, mod].set_ylim(0.005, 500)
+            for color_idx, key in enumerate(flux_boolean[f"{filter}_{module}"].keys()):
+                stats_function, lam_threshold, bkg_threshold= key.split("_")
+                above_threshold[flux_boolean[f"flux_boolean_{stats_function}_{module}"]] = np.nan
+                label_str = f"{eval(bkg_threshold):.1f} x {stats_function} = {eval(lam_threshold):.1f} DN/pix/ks"
+                axes[fltr, mod].plot(above_threshold, c=colors[color_idx+1])
+                axes[fltr, mod].axhline(eval(lam_threshold), c=colors[color_idx+1], ls= '--', label=label_str)
+
+            axes[fltr, mod].set_yscale("log")
+            axes[fltr, mod].set_xlabel("V3PA", fontsize=fontsize)
+            axes[fltr, mod].set_ylabel(f"DN/pix/ks ({filter})", fontsize=fontsize)
+            axes[fltr, mod].set_ylim(0.005, 500)
+            axes[fltr, mod].legend(loc="lower right", fontsize=fontsize-(fontsize/4))
 
     axes[0, 0].set_xlim(0, 360)
 
