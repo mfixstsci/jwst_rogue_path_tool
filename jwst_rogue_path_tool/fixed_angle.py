@@ -2,28 +2,14 @@
 This module contains the FixedAngle class which performs the analysis for
 JWST Rogue Path Tool.
 
-This takes an observation and converts the magnitudes of stars from the catalog
-and converts them into flux.
+This routine accepts an observation from the aptProgram class
 
 Authors
 -------
     - Mario Gennaro
     - Mees Fix
-
-Use
----
-    Routines in this module can be imported as follows:
-
-    >>> from jwst_rogue_path_tool.fixed_angle import FixedAngle
-    >>> fa = FixedAngle(observation, 259.0)
-    >>> fa.plot_regions()
-    >>> fa.plot_flux_vs_v3pa()
 """
 
-import operator
-
-from matplotlib.patches import PathPatch
-import matplotlib.pyplot as plt
 import numpy as np
 
 from jwst_rogue_path_tool.constants import (
@@ -38,7 +24,19 @@ from jwst_rogue_path_tool.utils import absolute_magnitude, get_pupil_from_filter
 np.seterr(divide="ignore")  # For np.log10 divide by 0
 
 
-class FixedAngle:
+class fixedAngle:
+    """Analysis for a single fixed V3 position angle. For a specific observation and V3PA
+    the magnitudes/fluxes of stars in and around the susceptibility region are calculated.
+
+    Parameters
+    ----------
+    observation : dictionary
+        Observation entry from aptProgram class
+
+    angle : float
+        V3 position angle
+    """
+
     def __init__(self, observation, angle):
         self.observation = observation
         self.angle = angle
@@ -69,6 +67,9 @@ class FixedAngle:
         self.get_total_counts()
 
     def calculate_absolute_magnitude(self):
+        """Calculate the absolute magnitude of the intensities averaged over exposures
+        for the specific V3 position angle.
+        """
         for module in self.susceptibility_region:
             for band in self.bands:
                 average_intensity = self.observation[f"averages_{module}"][self.angle][
@@ -86,6 +87,19 @@ class FixedAngle:
                 self.catalog[f"abs_mag_{band}_{module}"] = abs_magnitude
 
     def get_empirical_zero_points(self, module, pupil, filter):
+        """Get NRC emperical zero point points for pupil/filter combination for module A or B.
+
+        Parameters
+        ----------
+        module : str
+            NRC module name ("A" or "B")
+
+        pupil : str
+            NRC pupil name
+
+        filter : str
+            NRC filter name
+        """
         if module == "A":
             return NIRCAM_ZEROPOINTS["zeropoints_A"][f"{pupil}+{filter}"]
         elif module == "B":
@@ -94,16 +108,28 @@ class FixedAngle:
             assert ValueError(f"module must be value 'A' or 'B' not {module}")
 
     def get_ground_band(self, pupil, filter, catalog="2MASS"):
+        """Get band name from catalog corresponding to JWST NRC pupil/filter combination
+
+        Parameters
+        ----------
+        pupil : str
+            NRC pupil name
+
+        filter : str
+            NRC filter name
+
+        catalog : str
+            Name of source catalog (default: "2MASS")
+        """
         if catalog == "2MASS":
             return NIRCAM_ZEROPOINTS["match2MASS"][f"{pupil}+{filter}"]
-        elif catalog == "SIMBAD":
-            return NIRCAM_ZEROPOINTS["matchSIMBAD"][f"{pupil}+{filter}"]
         else:
-            assert ValueError(
-                f"Catalog must be value '2MASS' or 'SIMBAD' not {catalog}"
-            )
+            assert ValueError(f"Catalog must be value '2MASS' not {catalog}")
 
     def get_total_counts(self):
+        """Calculate the total number of counts based on the calculated magnitudes and
+        exposure durations.
+        """
         self.total_counts = {}
         for module in self.susceptibility_region:
             for filter in self.filters:
@@ -129,6 +155,7 @@ class FixedAngle:
                 self.total_counts[f"total_counts_{pupil}+{filter}_{module}"] = tot_cnts
 
     def get_total_magnitudes(self):
+        """Calculate the total (summed) magnitudes for each band in catalog."""
         self.total_magnitudes = {}
         for module in self.susceptibility_region:
             for band in self.bands:

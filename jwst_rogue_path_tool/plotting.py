@@ -1,24 +1,15 @@
 """
 This module contains all of the plotting functions for the JWST Rogue Path Tool.
-Currently, the tool supports exposure and observation level plots.
+Plotting output include:
+    * Valid angles at the exposure level
+    * Valid angles at the observation level
+    * Susceptibility region footprint w source intensities.
+    * V3 position angles vs flux at the observation level.
 
 Authors
 -------
     - Mario Gennaro
     - Mees Fix
-
-Use
----
-    Routines in this module can be imported as follows:
-
-    >>> from jwst_rogue_path_tool.plotting import create_exposure_plots, create_observation_plots
-    >>> from jwst_rogue_path_tool.plotting import plot_fixed_angle_regions, plot_flux_vs_v3pa
-    >>> observation = program.observations.data[1]  # get obs_id 1 from program
-    >>> ra, dec = program.ra, program.dec
-    >>> create_exposure_plots(observation, ra, dec)
-    >>> create_observation_plot(observation, ra, dec)
-    >>> plot_fixed_angle_regions(observation, 250)
-    >>> plot_flux_vs_v3pa(observation)
 """
 
 import astropy.units as u
@@ -29,8 +20,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 from pysiaf.utils import rotations
 
+from jwst_rogue_path_tool.utils import make_output_directory
 
-def create_exposure_plots(observation, ra, dec, **kwargs):
+
+def create_exposure_plots(observation, ra, dec, output_directory=None, **kwargs):
     """Generate exposure level plots
 
     Parameters
@@ -63,6 +56,7 @@ def create_exposure_plots(observation, ra, dec, **kwargs):
     )
 
     obs_id = observation["visit"]["observation"].values[0]
+    program = observation["nircam_templates"]["program"].values[0]
 
     for n, exp_num in enumerate(exposure_frames_data):
         angle_start = exposure_frames.valid_starts_angles[exp_num]
@@ -78,35 +72,53 @@ def create_exposure_plots(observation, ra, dec, **kwargs):
             plotting_catalog["dec"],
             c="deeppink",
         )
-
+        ax.axis("equal")
         ax.invert_xaxis()
 
-        for angles in zip(angle_start, angle_end):
-            min_theta = min(angles)
-            max_theta = max(angles)
-            w = Wedge(
-                (ra, dec),
-                wedge_length,
-                min_theta,
-                max_theta,
-                fill=False,
-                color="darkseagreen",
-                joinstyle="round",
-            )
-            ax.add_artist(w)
+        if angle_start is None and angle_end is None:
+            ax.annotate("NO VALID ANGLES", xy=(ra, dec))
+        else:
+            for angles in zip(angle_start, angle_end):
+                min_theta = (
+                    90.0 - angles[0]
+                )  # Origin of matplotlib is offset by 90 degrees
+                max_theta = (
+                    90.0 - angles[1]
+                )  # Origin of matplotlib is offset by 90 degrees
+                w = Wedge(
+                    (ra, dec),
+                    wedge_length,
+                    max_theta,
+                    min_theta,
+                    fill=False,
+                    color="darkseagreen",
+                    joinstyle="round",
+                )
+                ax.add_artist(w)
 
-        for angle in np.concatenate([angle_start, angle_end]):
-            exposure_frames.calculate_attitude(angle)
-            sus_region_patches = get_susceptibility_region_patch(
-                exposure_frames, exp_num
-            )
-            for patch in sus_region_patches:
-                ax.add_patch(patch)
+            for angle in np.concatenate([angle_start, angle_end]):
+                exposure_frames.calculate_attitude(angle)
+                sus_region_patches = get_susceptibility_region_patch(
+                    exposure_frames, exp_num
+                )
+                for patch in sus_region_patches:
+                    ax.add_patch(patch)
 
     plt.tight_layout()
 
+    if output_directory:
+        filename = f"exposure_plot_program_{program}_obs_id_{obs_id}.png"
+        full_path = output_directory / str(program) / "exposure_level"
+        make_output_directory(full_path)
+        print(f"WRITING FIGURE TO {full_path / filename}")
+        plt.savefig(full_path / filename)
+    else:
+        plt.show()
 
-def create_observation_plot(observation, ra, dec, **kwargs):
+    plt.close()
+
+
+def create_observation_plot(observation, ra, dec, output_directory=None, **kwargs):
     """Plot that describe all valid angles at the observation level.
     The observation level plot is a single plot of all valid angles
     from a set of exposures.
@@ -130,7 +142,6 @@ def create_observation_plot(observation, ra, dec, **kwargs):
 
     wedge_length = inner_radius - 1
     exposure_frames = observation["exposure_frames"]
-    exposure_frames_data = exposure_frames.data
 
     observation_number = observation["nircam_templates"]["observation"].values[0]
     program = observation["nircam_templates"]["program"].values[0]
@@ -140,16 +151,6 @@ def create_observation_plot(observation, ra, dec, **kwargs):
         catalog, ra, dec, inner_radius, outer_radius
     )
 
-    all_starting_angles = [
-        exposure_frames.valid_starts_angles[exp_num] for exp_num in exposure_frames_data
-    ]
-    all_ending_angles = [
-        exposure_frames.valid_ends_angles[exp_num] for exp_num in exposure_frames_data
-    ]
-
-    all_starting_angles = np.unique(np.concatenate(all_starting_angles))
-    all_ending_angles = np.unique(np.concatenate(all_ending_angles))
-
     ax = plt.subplot()
     ax.set_xlabel("RA [Degrees]")
     ax.set_ylabel("DEC [Degrees]")
@@ -157,24 +158,40 @@ def create_observation_plot(observation, ra, dec, **kwargs):
     ax.scatter(ra, dec, marker="X", c="red")
     ax.scatter(plotting_catalog["ra"], plotting_catalog["dec"], c="deeppink")
 
+    ax.axis("equal")
     ax.invert_xaxis()
 
-    for angles in zip(all_starting_angles, all_ending_angles):
-        min_theta = min(angles)
-        max_theta = max(angles)
-        w = Wedge(
-            (ra, dec),
-            wedge_length,
-            min_theta,
-            max_theta,
-            fill=False,
-            color="darkseagreen",
-            joinstyle="round",
-        )
-        ax.add_artist(w)
+    all_starting_angles = observation["valid_starts_angles"]
+    all_ending_angles = observation["valid_ends_angles"]
+
+    if all_starting_angles.size == 0 and all_ending_angles.size == 0:
+        ax.annotate("NO VALID ANGLES", xy=(ra, dec))
+    else:
+        for angles in zip(all_starting_angles, all_ending_angles):
+            min_theta = 90.0 - angles[0]  # Origin of matplotlib is offset by 90 degrees
+            max_theta = 90.0 - angles[1]  # Origin of matplotlib is offset by 90 degrees
+            w = Wedge(
+                (ra, dec),
+                wedge_length,
+                max_theta,
+                min_theta,
+                fill=False,
+                color="darkseagreen",
+                joinstyle="round",
+            )
+            ax.add_artist(w)
 
     plt.tight_layout()
-    plt.show()
+    if output_directory:
+        filename = f"observation_plot_program_{program}_obs_id_{observation_number}.png"
+        full_path = output_directory / str(program) / "observation_level"
+        make_output_directory(full_path)
+        print(f"WRITING FIGURE TO {full_path / filename}")
+        plt.savefig(full_path / filename)
+    else:
+        plt.show()
+
+    plt.close()
 
 
 def get_susceptibility_region_patch(exposure_frames, exposure_id):
@@ -251,7 +268,20 @@ def locate_targets_in_annulus(catalog, ra, dec, inner_radius, outer_radius):
     return plotting_catalog
 
 
-def plot_fixed_angle_regions(observation, angle, savefig=False):
+def plot_fixed_angle_regions(observation, angle, output_directory=None):
+    """Plot the susceptibility region and targets in and around it.
+
+    Parameters
+    ----------
+    observation : dictionary
+        Dictionary of a single observation dataset
+
+    angle : float
+        Angle of attitude.
+
+    output_directory : str
+        Directory to save figure to.
+    """
     program = observation["nircam_templates"]["program"].values[0]
     observation_number = observation["nircam_templates"]["observation"].values[0]
     susceptibility_region = observation["exposure_frames"].susceptibility_region
@@ -292,16 +322,32 @@ def plot_fixed_angle_regions(observation, angle, savefig=False):
         patch = PathPatch(susceptibility_region[module].V2V3path, alpha=0.1)
         ax.add_patch(patch)
 
-    if savefig:
-        output_filename = f"{program}_{observation_number}_{modules_name}_{angle}.png"
-        plt.savefig(output_filename)
+    if output_directory:
+        full_path = output_directory / str(program) / "susceptibility_regions"
+        filename = f"{program}_{observation_number}_{modules_name}_{angle}.png"
+        make_output_directory(full_path)
+        print(f"WRITING FIGURE TO {full_path / filename}")
+        plt.savefig(full_path / filename)
     else:
-        plt.show()
+        plt.show(fig)
 
-    plt.close()
+    plt.close(fig)
 
 
-def plot_flux_vs_v3pa(observation, fontsize=20):
+def create_v3pa_vs_flux_plot(observation, output_directory=None, fontsize=15):
+    """Create plot of V3 position angles and flux for a single observation.
+
+    Parameters
+    ----------
+    observation : dictionary
+        Dictionary of data associated with a single observation.
+
+    output_dictionary : str
+        Directory to save figure to
+
+    fontsize : int
+        Fontsize for plot
+    """
     observation_number = observation["nircam_templates"]["observation"].values[0]
     program_id = observation["visit"]["program"].values[0]
     susceptibility_regions = observation["exposure_frames"].susceptibility_region
@@ -362,7 +408,19 @@ def plot_flux_vs_v3pa(observation, fontsize=20):
             )
 
     axes[0, 0].set_xlim(0, 360)
-
     fig.tight_layout()
-    plt.show(fig)
+
+    if output_directory:
+        if len(modules) > 1:
+            filename = f"v3pa_vs_flux_{program_id}_{observation_number}_ALL.png"
+        else:
+            filename = f"v3pa_vs_flux_{program_id}_{observation_number}_{module}.png"
+
+        full_path = output_directory / str(program_id) / "v3pa_vs_flux"
+        make_output_directory(full_path)
+        print(f"WRITING FIGURE TO {full_path / filename}")
+        plt.savefig(full_path / filename)
+    else:
+        plt.show(fig)
+
     plt.close(fig)

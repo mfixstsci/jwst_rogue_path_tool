@@ -18,7 +18,7 @@ import pandas as pd
 from astropy.table import Table
 
 
-class AptSqlFile:
+class aptSqlFile:
     """Read and parse SQL file generated from APT"""
 
     def __init__(self, sqlfile):
