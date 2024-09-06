@@ -12,15 +12,6 @@ Authors
 -------
     - Mario Gennaro
     - Mees Fix
-
-Use
----
-    Routines in this module can be imported as follows:
-
-    >>> from jwst_rogue_path_tool.detect_claws import AptProgram
-    >>> filename = "/path/to/sql_apt_file.sql"
-    >>> program = AptProgram(filename, angular_step=1, usr_defined_obs=[1])
-    >>> program.run()
 """
 
 import collections
@@ -37,14 +28,18 @@ from pysiaf.utils import rotations
 from scipy.ndimage import gaussian_filter
 from tqdm import tqdm
 
-from jwst_rogue_path_tool.apt_sql_parser import AptSqlFile
+from jwst_rogue_path_tool.apt_sql_parser import aptSqlFile
 from jwst_rogue_path_tool.constants import (
     PROJECT_DIRNAME,
     SUSCEPTIBILITY_REGION_FULL,
     SUSCEPTIBILITY_REGION_SMALL,
 )
-from jwst_rogue_path_tool.fixed_angle import FixedAngle
-from jwst_rogue_path_tool.plotting import create_exposure_plots, create_observation_plot
+from jwst_rogue_path_tool.fixed_angle import fixedAngle
+from jwst_rogue_path_tool.plotting import (
+    create_exposure_plots,
+    create_observation_plot,
+    create_v3pa_vs_flux_plot,
+)
 from jwst_rogue_path_tool.utils import (
     calculate_background,
     get_pupil_from_filter,
@@ -52,19 +47,22 @@ from jwst_rogue_path_tool.utils import (
 )
 
 
-class AptProgram:
+class aptProgram:
     """Class that handles the APT-program-level information.
-    AptProgram takes the sqlfile input and uses the "Observation" and "ExposureFrame"
+    aptProgram takes the sqlfile input and uses the "observations" and "exposureFrame"
     objects to organize data into python objects that can be used for various analyses.
     """
 
     def __init__(
         self,
         sqlfile,
-        angular_step=None,
+        angular_step=1.0,
         usr_defined_obs=None,
-        usr_defined_angs=None,
-        bkg_params=[{"threshold": 0.1, "function": np.min}],
+        usr_defined_angles=None,
+        bkg_params=[
+            {"threshold": 0.1, "function": np.min},
+            {"threshold": 0.2, "function": np.median},
+        ],
     ):
         """
         Parameters
@@ -74,15 +72,22 @@ class AptProgram:
 
         angular_step : float
             Attitude angle step size used to check if surrounding targets land
-            in susceptibility region
+            in susceptibility region (default: 1.0)
 
         usr_defined_obs : list
             List of specific oberservations to load from program
 
-        angles_list : list
+        usr_defined_angles : list
+            List of angles to valid, only the angle values in this list will be
+            evaluated
+        bkg_params : dictionary
+            Dictionary of background threshold values and function to apply to background
+            calculations. "{threshold": 0.1, "function: np.min}" will calculate the value of 10%
+            of the minimum background based on JWST pointing. Docs for jwst_backgrounds
+            https://github.com/spacetelescope/jwst_backgrounds
         """
 
-        self.__sql = AptSqlFile(sqlfile)
+        self.__sql = aptSqlFile(sqlfile)
         if "fixed_target" not in self.__sql.tablenames:
             raise Exception("JWST Rogue Path Tool only supports fixed targets")
 
@@ -91,7 +96,7 @@ class AptProgram:
 
         # Users may only want to check a list of specific angles of attitude,
         # if they provide a list of angles, those are the only angles that are checked.
-        if angular_step and usr_defined_angs:
+        if angular_step and usr_defined_angles:
             raise Exception(
                 "You defined an angular step that will check all valid angles (0 --> 359.0) \
                 in steps of {angular_step} and usr_defined_angles of {usr_defined_angles} which \
@@ -100,8 +105,8 @@ class AptProgram:
             )
         elif self.angular_step:
             self.angles_list = np.arange(0, 360.0, self.angular_step)
-        elif usr_defined_angs:
-            self.angles_list = usr_defined_angs
+        elif usr_defined_angles:
+            self.angles_list = usr_defined_angles
         else:
             raise Exception(
                 "angular_step and usr_defined_angs are both None. You must pass angular_step \
@@ -112,7 +117,7 @@ class AptProgram:
 
     def __build_observations(self):
         """Convenience method to build Observation objects"""
-        self.observations = Observations(self.__sql, self.usr_defined_obs)
+        self.observations = observations(self.__sql, self.usr_defined_obs)
 
     def __build_exposure_frames(self):
         """Convenience method to build ExposureFrame objects"""
@@ -121,7 +126,7 @@ class AptProgram:
                 continue
             else:
                 observation = self.observations.data[observation_id]
-                exposure_frames = ExposureFrames(
+                exposure_frames = exposureFrames(
                     observation, self.angles_list, self.angular_step
                 )
                 self.observations.data[observation_id]["exposure_frames"] = (
@@ -173,7 +178,7 @@ class AptProgram:
             observation["pupils"] = get_pupil_from_filter(filters)
 
             counts_per_filter = [
-                FixedAngle(observation, angle).total_counts
+                fixedAngle(observation, angle).total_counts
                 for angle in self.angles_list
             ]
 
@@ -263,7 +268,7 @@ class AptProgram:
         self.ra = target_info["ra_computed"][0]
         self.dec = target_info["dec_computed"][0]
 
-    def plot_exposures(self, observation):
+    def plot_exposures(self, observation, output_directory=None):
         """Create plot for individual exposures for a given observation. Plot
         will contain targets defined in a specific inner and outer radius
         defined by user. Check `jwst_rogue_path_tool.plotting.create_exposure_plots`
@@ -274,9 +279,9 @@ class AptProgram:
         observation_id : int
             Observation id number to generate figures from.
         """
-        create_exposure_plots(observation, self.ra, self.dec)
+        create_exposure_plots(observation, self.ra, self.dec, output_directory)
 
-    def plot_observation(self, observation):
+    def plot_observation(self, observation, output_directory=None):
         """Create plot at the observation level. The "observation level" is
         defined as all of the valid angles from each exposure combined. Plot
         will contain targets defined in a specific inner and outer radius
@@ -288,7 +293,20 @@ class AptProgram:
         observation_id : int
             Observation id number to generate figures from.
         """
-        create_observation_plot(observation, self.ra, self.dec)
+        create_observation_plot(observation, self.ra, self.dec, output_directory)
+
+    def plot_v3pa_vs_flux(self, observation, output_directory=None):
+        """Create plot of position angle vs flux. This plot will only work if users
+        use the angular_step keyword calculate the flux for all 360 degrees of attitude.
+        """
+
+        if self.angular_step:
+            create_v3pa_vs_flux_plot(observation, output_directory)
+        else:
+            raise Exception(
+                "PLOTTING V3PA VS FLUX ONLY WORKS FOR OBSERVATIONS WITH ALL 360 DEGREES \
+                OF ATTITUDE. SET ANGULAR STEP AND RE-RUN JWST ROGUE PATH TOOL."
+            )
 
     def run(self):
         """Convenience method to build AptProgram"""
@@ -310,23 +328,10 @@ class AptProgram:
         observation : jwst_rogue_path_tool.Observations
             Observation object to extract valid angle data from.
         """
+
+        obs_id = observation["visit"]["observation"].values[0]
+
         f = open(filename, "a")
-        exposure_frames = observation["exposure_frames"]
-
-        all_starting_angles = [
-            exposure_frames.valid_starts_angles[exp_num]
-            for exp_num in exposure_frames.data
-        ]
-        all_ending_angles = [
-            exposure_frames.valid_ends_angles[exp_num]
-            for exp_num in exposure_frames.data
-        ]
-
-        all_starting_angles = np.unique(np.concatenate(all_starting_angles))
-        all_ending_angles = np.unique(np.concatenate(all_ending_angles))
-
-        obs_id = observation["visit"]["observation"][0]
-
         f.write(f"**** Valid Ranges for Observation {obs_id} ****\n")
         for min_angle, max_angle in zip(all_starting_angles, all_ending_angles):
             f.write(f"PA Start -- PA End: {min_angle} -- {max_angle}\n")
@@ -337,13 +342,13 @@ class AptProgram:
         f.close()
 
 
-class Observations:
+class observations:
     """Class the organizes metadata from APT SQL file into python object.
     This object is organized by observation number and contains metadata
     associated with it.
     """
 
-    def __init__(self, apt_sql, usr_defined_obs=None):
+    def __init__(self, apt_sql, output_directory=None, usr_defined_obs=None):
         """
         Parameters
         ----------
@@ -464,7 +469,7 @@ class Observations:
         self.data = program_data_by_observation_id
 
 
-class ExposureFrames:
+class exposureFrames:
     """Class the organizes data from a single observation (made of exposures)
     into exposure frames. An exposure frame is a group of exposures associated
     with a value in the NRC order specification table. Exposures with the same
@@ -503,7 +508,7 @@ class ExposureFrames:
             left_on=["exposure_spec_order_number"],
             right_on=["order_number"],
             how="left",
-        ).set_index(self.module_by_exposure.index)
+        )
 
         self.get_total_exposure_duration()
         self.build_exposure_frames_data()
@@ -545,16 +550,15 @@ class ExposureFrames:
         a specific dither pointing. These tables contain exposures that all
         share the same RA and Dec.
         """
-        dither_pointings = self.exposure_frame_table.dither_point_index
+        dither_pointings = self.exposure_frame_table.dither_point_index.unique()
+        exposures = self.module_by_exposure.index
 
         self.data = {}
 
-        exposure_by_order_number = self.exposure_frame_table.set_index(
-            ["exposure", "order_number"]
-        )
-
-        for idx in dither_pointings:
-            self.data[idx] = exposure_by_order_number.loc[idx, :]
+        for dp, exp in zip(dither_pointings, exposures):
+            self.data[exp] = self.exposure_frame_table[
+                self.exposure_frame_table["dither_point_index"] == dp
+            ]
 
     def get_total_exposure_duration(self):
         total_exposure_duration_table = self.exposure_frame_table.groupby(
@@ -574,34 +578,48 @@ class ExposureFrames:
         """
         sus_reg = {}
         if exposure["modules"] == "ALL" or exposure["modules"] == "BOTH":
-            sus_reg["A"] = SusceptibilityRegion(module="A", smooth=5)
-            sus_reg["B"] = SusceptibilityRegion(module="B", smooth=5)
+            sus_reg["A"] = susceptibilityRegion(module="A", smooth=5)
+            sus_reg["B"] = susceptibilityRegion(module="B", smooth=5)
         elif exposure["modules"] == "A":
-            sus_reg["A"] = SusceptibilityRegion(module=exposure["modules"], smooth=5)
+            sus_reg["A"] = susceptibilityRegion(module=exposure["modules"], smooth=5)
         elif exposure["modules"] == "B":
-            sus_reg["B"] = SusceptibilityRegion(module=exposure["modules"], smooth=5)
+            sus_reg["B"] = susceptibilityRegion(module=exposure["modules"], smooth=5)
 
         return sus_reg
 
     def get_visibility_windows(self):
         """Method to calculate when a target has entered/exited a
-        susceptibility region.
+        susceptibility region. This is done at the exposure and
+        observation levels.
         """
+
+        # Begin calculating exposure level angles
         self.valid_starts_indices = {}
         self.valid_ends_indices = {}
 
         self.valid_starts_angles = {}
         self.valid_ends_angles = {}
 
+        angles_bool_obs = []
         for exp_num in self.swept_angles:
             angles_bool = [
                 self.swept_angles[exp_num][angle]["targets_in"][0]
                 for angle in self.swept_angles[exp_num]
             ]
 
+            angles_bool_obs.append(angles_bool)
+
             change = np.where(angles_bool != np.roll(angles_bool, 1))[0]
-            if angles_bool[change[0]]:
-                change = np.roll(change, 1)
+            # Include cases where target is in susceptibility regions
+            # for every attitude angle.
+            if change.size == 0:
+                self.valid_starts_angles[exp_num] = None
+                self.valid_ends_angles[exp_num] = None
+                continue
+            else:
+                if angles_bool[change[0]]:
+                    change = np.roll(change, 1)
+
             starts = change[::2]
             ends = change[1::2]
 
@@ -610,6 +628,24 @@ class ExposureFrames:
 
             self.valid_starts_angles[exp_num] = (starts - 0.5) * self.angular_step
             self.valid_ends_angles[exp_num] = (ends - 0.5) * self.angular_step
+
+        # Begin calculating observation level angles
+        angles_bool_obs = np.array(angles_bool_obs)
+        angles_bool_obs = np.all(angles_bool_obs, axis=0)
+        change_obs = np.where(angles_bool_obs != np.roll(angles_bool_obs, 1))[0]
+
+        if change_obs.size == 0:
+            self.observation["valid_starts_angles"] = None
+            self.observation["valid_ends_angles"] = None
+        else:
+            if angles_bool_obs[change[0]]:
+                change_obs = np.roll(change_obs, 1)
+
+        starts = change_obs[::2]
+        ends = change_obs[1::2]
+
+        self.observation["valid_starts_angles"] = (starts - 0.5) * self.angular_step
+        self.observation["valid_ends_angles"] = (ends - 0.5) * self.angular_step
 
     def calculate_attitude(self, v3pa):
         """Calculate attitude matrix given V3 position angle.
@@ -649,10 +685,9 @@ class ExposureFrames:
         ra, dec = self.catalog["ra"], self.catalog["dec"]
         self.swept_angles = {}
 
-        for idx in self.data:
-            self.dataframe = self.data[idx]
-            self.exposure_data = self.dataframe.loc[1]
-
+        for obs_num, obs_data in self.data.items():
+            self.dataframe = obs_data
+            self.exposure_data = self.dataframe.iloc[0]
             self.susceptibility_region = self.get_susceptibility_region(
                 self.exposure_data
             )
@@ -663,7 +698,7 @@ class ExposureFrames:
                     min(self.attitude_angles),
                     max(self.attitude_angles),
                     self.observation_number,
-                    idx,
+                    obs_num,
                 )
             )
 
@@ -703,7 +738,7 @@ class ExposureFrames:
                     attitudes_swept[angle][f"v2_{key}"] = v2
                     attitudes_swept[angle][f"v3_{key}"] = v3
             # Store swept angles and values.
-            self.swept_angles[idx] = attitudes_swept
+            self.swept_angles[obs_num] = attitudes_swept
 
     def V2V3_at_one_attitude(self, ra_degrees, dec_degrees, v3pa, verbose=False):
         """
@@ -734,7 +769,22 @@ class ExposureFrames:
         return v2_degrees, v3_degress
 
 
-class SusceptibilityRegion:
+class susceptibilityRegion:
+    """Class that describes the JWST NRC susceptibility regions. Creates region and
+    calculates intensities based on magnitude and location of target that falls in 
+    susceptibility region.
+
+    Parameters
+    ----------
+    module : str
+        Name of JWST NRC module ("A or "B")
+
+    small : bool
+        Create smaller susceptibility region (default: False)
+
+    smooth : bool
+        Smooth data with Gaussian Filter (default: False)
+    """
     def __init__(self, module, small=False, smooth=False):
         if small:
             self.module_data = SUSCEPTIBILITY_REGION_SMALL
