@@ -91,6 +91,5 @@ celerybeat-schedule
 .ropeproject
 
 # jwst_rogue_path_tool data
-jwst_rogue_path_tool/data/
 config.json
 
