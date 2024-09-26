@@ -13,9 +13,6 @@ import pathlib
 from jwst_rogue_path_tool.constants import PROJECT_DIRNAME
 from jwst_rogue_path_tool.detect_claws import aptProgram
 
-apt_programs = [pathlib.Path(PROJECT_DIRNAME) / "data" / "APT_test_4RPtool.sql"]
-rogue_path_output = pathlib.Path("/Users/mfix/jwst_rogue_path_outputs")
-
 
 def process_programs(apt_programs, output_directory):
     """Process and write output from program."""
