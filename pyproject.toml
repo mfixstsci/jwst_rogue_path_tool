@@ -51,6 +51,9 @@ include-package-data = true
 [tool.setuptools.packages.find]
 namespaces = false
 
+[project.scripts]
+process_program = "jwst_rogue_path_tool.scripts.output_results:main"
+
 [tool.setuptools_scm]
 
 [tool.pytest]

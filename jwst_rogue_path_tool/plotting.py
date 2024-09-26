@@ -379,8 +379,8 @@ def create_v3pa_vs_flux_plot(observation, output_directory=None, fontsize=15):
     )
 
     for mod, module in enumerate(modules):
-        for fltr, filter in enumerate(filters):
-            flux_key = f"dn_pix_ks_{pupils[filter]}+{filter}_{module}"
+        for fltr, (filter, pupil) in enumerate(zip(filters, pupils)):
+            flux_key = f"dn_pix_ks_{pupil}+{filter}_{module}"
             flux_values = flux[flux_key]
             axes[fltr, mod].plot(flux_values)
             above_threshold = np.copy(flux_values)
