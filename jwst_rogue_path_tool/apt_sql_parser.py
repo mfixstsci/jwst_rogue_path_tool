@@ -93,7 +93,9 @@ class aptSqlFile:
                 names.append(line[len(prefix) : line.find("(")].strip())
 
         names = sorted(list(set(names)))
-        names.remove("#AOK values")
+
+        if "#AOK values" in names:
+            names.remove("#AOK values")
 
         return names
 

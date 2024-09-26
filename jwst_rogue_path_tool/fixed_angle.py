@@ -60,8 +60,8 @@ class fixedAngle:
             "exposure_frames"
         ].total_exposure_duration_table
 
-        self.filters = self.total_exposure_duration_table.index.values
-        self.pupils = get_pupil_from_filter(self.filters)
+        self.filters = self.total_exposure_duration_table["filters"]
+        self.pupils = self.total_exposure_duration_table["pupils"]
         self.calculate_absolute_magnitude()
         self.get_total_magnitudes()
         self.get_total_counts()
@@ -132,13 +132,14 @@ class fixedAngle:
         """
         self.total_counts = {}
         for module in self.susceptibility_region:
-            for filter in self.filters:
-                # Obtain ground based magnitude based on filter/pupil combo.
-                pupil = self.pupils[filter]
+            for _, row in self.total_exposure_duration_table.iterrows():
+                filter = row["filters"]
+                pupil = row["pupils"]
+
                 ground_band = self.get_ground_band(pupil, filter)
                 # Obtain emperical (Vega Mag) zeropoint based on filter/pupil combo
                 emperical_zeropoint = self.get_empirical_zero_points(
-                    module, self.pupils[filter], filter
+                    module, pupil, filter
                 )
 
                 # Get summed abs magnitude for entire band.
@@ -146,7 +147,10 @@ class fixedAngle:
                     f"total_mag_{ground_band}_{module}"
                 ]
 
-                total_exposure_duration = self.total_exposure_duration_table[filter]
+                total_exposure_duration = self.total_exposure_duration_table.loc[
+                    (self.total_exposure_duration_table["pupils"] == pupil)
+                    & (self.total_exposure_duration_table["filters"] == filter)
+                ]["photon_collecting_duration"].values[0]
                 tot_cnts = (
                     10 ** ((emperical_zeropoint - summed_abs_mag) / 2.5)
                     * total_exposure_duration

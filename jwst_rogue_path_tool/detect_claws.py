@@ -24,6 +24,7 @@ from astropy.io import fits
 from matplotlib.path import Path
 import numpy as np
 import pandas as pd
+import pathlib
 from pysiaf.utils import rotations
 from scipy.ndimage import gaussian_filter
 from tqdm import tqdm
@@ -44,6 +45,7 @@ from jwst_rogue_path_tool.utils import (
     calculate_background,
     get_pupil_from_filter,
     get_pivot_wavelength,
+    make_output_directory,
 )
 
 
@@ -173,15 +175,13 @@ class aptProgram:
                 "exposure_frames"
             ].total_exposure_duration_table
 
-            filters = total_exposure_durations.index.values
-            observation["filters"] = filters
-            observation["pupils"] = get_pupil_from_filter(filters)
+            observation["filters"] = total_exposure_durations["filters"]
+            observation["pupils"] = total_exposure_durations["pupils"]
 
             counts_per_filter = [
                 fixedAngle(observation, angle).total_counts
                 for angle in self.angles_list
             ]
-
             flux_keys = list(
                 set(chain.from_iterable(sub.keys() for sub in counts_per_filter))
             )
@@ -190,12 +190,13 @@ class aptProgram:
                 flux_per_key = list(map(operator.itemgetter(key), counts_per_filter))
                 final_fluxes["total_counts"][key] = np.array(flux_per_key)
 
-                for filter in filters:
+                for filter in observation["filters"]:
+                    exposure_duration = total_exposure_durations.loc[
+                        (total_exposure_durations["filters"] == filter)
+                    ]["photon_collecting_duration"].values[0]
                     if filter in key:
                         pix_dn_ks = (
-                            final_fluxes["total_counts"][key]
-                            * 1000
-                            / total_exposure_durations[filter]
+                            final_fluxes["total_counts"][key] * 1000 / exposure_duration
                         )
                         flux_key = key.replace("total_counts", "dn_pix_ks")
                         final_fluxes["dn_pix_ks"][flux_key] = pix_dn_ks
@@ -215,7 +216,9 @@ class aptProgram:
                 ].susceptibility_region
                 modules = susceptibility_regions.keys()
                 fluxes = observation["flux"]["dn_pix_ks"]  # Get flux dictionary
-
+                total_exposure_duration_table = observation[
+                    "exposure_frames"
+                ].total_exposure_duration_table
                 flux_boolean = collections.defaultdict(dict)
                 for parameters in self.bkg_parameters:
                     above_threshold = []
@@ -223,14 +226,15 @@ class aptProgram:
                     statistic_function = parameters["function"]
                     # Calculate the background for each filter/pupil combination
                     for module in modules:
-                        for filter, pupil in observation["pupils"].items():
+                        for index, row in total_exposure_duration_table.iterrows():
+                            pupil = row["pupils"]
+                            filter = row["filters"]
                             pivot_wavelength = get_pivot_wavelength(pupil, filter)
                             background = calculate_background(
                                 self.ra, self.dec, pivot_wavelength, threshold
                             )
 
                             wavelengths = background.bathtub["total_thiswave"]
-                            pivot_wavelength = get_pivot_wavelength(pupil, filter)
                             lam_thresh = (
                                 threshold
                                 * statistic_function(wavelengths)
@@ -317,29 +321,50 @@ class aptProgram:
         self.__get_flux_vs_angle()
         self.__find_background_thresholds()
 
-    def write_report(self, filename, observation):
-        """Write "observation level" report given an observation object.
+    def make_report(self, observation, output_directory=None):
+        """Display of write "observation level" report given an observation in a program.
 
         Parameters
         ----------
         filename : str
             Name of file to write report into.
 
-        observation : jwst_rogue_path_tool.Observations
-            Observation object to extract valid angle data from.
+        observation : dict
+            Observation out of observations.data attribute
         """
 
         obs_id = observation["visit"]["observation"].values[0]
+        program = observation["nircam_templates"]["program"].values[0]
 
-        f = open(filename, "a")
-        f.write(f"**** Valid Ranges for Observation {obs_id} ****\n")
-        for min_angle, max_angle in zip(all_starting_angles, all_ending_angles):
-            f.write(f"PA Start -- PA End: {min_angle} -- {max_angle}\n")
+        all_starting_angles = observation["valid_starts_angles"]
+        all_ending_angles = observation["valid_ends_angles"]
 
-        # if no_valid_angle_exposures:
-        #     f.write(f"NO VALID ANGLES FOR EXPOSURES {no_valid_angle_exposures}\n")
+        if output_directory:
+            path = pathlib.Path(output_directory)
+            path = path / str(program) / "valid_angle_reports"
+            make_output_directory(path)
 
-        f.close()
+            if path.is_dir():
+                filename = (
+                    f"program_{program}_observation_{obs_id}_valid_angle_report.txt"
+                )
+
+                full_file_path = path / filename
+
+                f = open(full_file_path, "a")
+                f.write(f"**** Valid Ranges for Observation {obs_id} ****\n")
+                for min_angle, max_angle in zip(all_starting_angles, all_ending_angles):
+                    f.write(f"PA Start -- PA End: {min_angle} -- {max_angle}\n")
+                f.close()
+                print(f"WROTE REPORT TO {full_file_path}")
+            else:
+                raise Exception(f"CAN NOT WRITE TO {path}, NOT A VALID DIRECTORY")
+        else:
+            print("NO OUTPUT DIRECTORY PROVIDED, DISPLAYING RESULTS")
+            print("================================================")
+            print(f"**** Valid Ranges for Observation {obs_id} ****\n")
+            for min_angle, max_angle in zip(all_starting_angles, all_ending_angles):
+                print(f"PA Start -- PA End: {min_angle} -- {max_angle}\n")
 
 
 class observations:
@@ -348,7 +373,7 @@ class observations:
     associated with it.
     """
 
-    def __init__(self, apt_sql, output_directory=None, usr_defined_obs=None):
+    def __init__(self, apt_sql, usr_defined_obs=None):
         """
         Parameters
         ----------
@@ -561,9 +586,17 @@ class exposureFrames:
             ]
 
     def get_total_exposure_duration(self):
-        total_exposure_duration_table = self.exposure_frame_table.groupby(
-            "filter_short"
-        ).sum()["photon_collecting_duration"]
+        total_exposure_duration_table = (
+            self.exposure_frame_table.groupby("filter_short")
+            .sum()["photon_collecting_duration"]
+            .reset_index()
+        )
+
+        filters = total_exposure_duration_table["filter_short"]
+        pupils = get_pupil_from_filter(filters)
+
+        total_exposure_duration_table["filters"] = pupils.keys()
+        total_exposure_duration_table["pupils"] = pupils.values()
 
         self.total_exposure_duration_table = total_exposure_duration_table
 
@@ -771,7 +804,7 @@ class exposureFrames:
 
 class susceptibilityRegion:
     """Class that describes the JWST NRC susceptibility regions. Creates region and
-    calculates intensities based on magnitude and location of target that falls in 
+    calculates intensities based on magnitude and location of target that falls in
     susceptibility region.
 
     Parameters
@@ -785,6 +818,7 @@ class susceptibilityRegion:
     smooth : bool
         Smooth data with Gaussian Filter (default: False)
     """
+
     def __init__(self, module, small=False, smooth=False):
         if small:
             self.module_data = SUSCEPTIBILITY_REGION_SMALL

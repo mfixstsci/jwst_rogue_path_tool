@@ -70,16 +70,16 @@ def get_pupil_from_filter(filters):
 
     for fltr in filters:
         if "+" in fltr:
-            splt = filter.split("+")
+            splt = fltr.split("+")
             pupil = splt[0]
             filter = splt[1]
         elif "_" in fltr:
-            splt = filter.split("_")
+            splt = fltr.split("_")
             pupil = splt[0]
             filter = splt[1]
         else:
-            pupil = "CLEAR"
             filter = fltr
+            pupil = "CLEAR"
 
         pupils[filter] = pupil
 
