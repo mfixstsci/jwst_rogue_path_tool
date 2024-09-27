@@ -82,6 +82,7 @@ class aptProgram:
         usr_defined_angles : list
             List of angles to valid, only the angle values in this list will be
             evaluated
+
         bkg_params : dictionary
             Dictionary of background threshold values and function to apply to background
             calculations. "{threshold": 0.1, "function: np.min}" will calculate the value of 10%

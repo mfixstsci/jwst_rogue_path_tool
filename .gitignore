@@ -93,3 +93,11 @@ celerybeat-schedule
 # jwst_rogue_path_tool data
 config.json
 
+# sql files
+*.sql
+
+# DS Store
+*.DS_Store
+
+# Docs
+*_static

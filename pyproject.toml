@@ -11,6 +11,8 @@ classifiers = ["Programming Language :: Python"]
 requires-python = ">=3.9"
 dependencies = [
     "astropy>=5.3.1",
+    "astroquery>=0.4.7",
+    "furo>=2024.8.6",
     "jupyter>=1.0.0",
     "jwst_backgrounds>=1.2.0",
     "matplotlib>=3.7.2",

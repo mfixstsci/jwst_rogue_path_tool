@@ -11,7 +11,7 @@ Use
 
     >>> from jwst_rogue_path_tool.apt_sql_parser import AptSqlFile
     >>> filename = "/path/to/sql_apt_file.sql"
-    >>> sql = AptSqlFile(filename)
+    >>> sql = aptSqlFile(filename)
 """
 
 import pandas as pd
