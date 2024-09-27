@@ -22,14 +22,8 @@ pip install -e .
 
 ## Outputs
 
-<p align="center">
-  <img src="docs/_static/exposure_plot_program_0_obs_id_3.png" width="400"/>
-</p>
+<img src="docs/_static/exposure_plot_program_0_obs_id_3.png">
 
-<p align="center">
-  <img src="docs/_static/0_1_ALL_100.png" width="400"/>
-</p>
+<img src="docs/_static/0_1_ALL_100.png">
 
-<p align="center">
-  <img src="docs/_static/v3pa_vs_flux_0_5_B.png" width="400"/>
-</p>
+<img src="docs/_static/v3pa_vs_flux_0_5_B.png">
