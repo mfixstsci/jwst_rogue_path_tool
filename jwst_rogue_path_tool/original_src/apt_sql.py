@@ -4,62 +4,61 @@ import argparse
 import csv
 from astropy.table import Table
 
+
 def arguments():
-    """Parse and return command line arguments.
-    """
+    """Parse and return command line arguments."""
     parser = argparse.ArgumentParser(
-        description='Show in browser PPSDB table data (.sql) exported by APT.'
-                "\nList available tables, if 'table' is not specified.",
-        epilog='example: aptx_sql.py 98765.sql exposures')
-    parser.add_argument('sqlfile',help='SQL file exported by APT')
-    parser.add_argument('tablename',nargs='?',default=None,
-            help='Name of a table in the SQL file')
+        description="Show in browser PPSDB table data (.sql) exported by APT."
+        "\nList available tables, if 'table' is not specified.",
+        epilog="example: aptx_sql.py 98765.sql exposures",
+    )
+    parser.add_argument("sqlfile", help="SQL file exported by APT")
+    parser.add_argument(
+        "tablename", nargs="?", default=None, help="Name of a table in the SQL file"
+    )
     return parser.parse_args()
 
+
 class Sqlfile:
-    """An sql file exported by APT.
-    """
+    """An sql file exported by APT."""
 
     def __init__(self, sqlfile):
-        """Read data from sql file. Get list of tables names.
-        """
+        """Read data from sql file. Get list of tables names."""
         self.__sqlfile = sqlfile
         self.__sql = self.sqlread()
         self.tablenames = self.tablenames()
 
     def sqlread(self):
-        """Read sql file exported by APT. Strip trailing newlines.
-        """
+        """Read sql file exported by APT. Strip trailing newlines."""
         sql = list()
-        with open(self.__sqlfile, 'r') as f:
+        with open(self.__sqlfile, "r") as f:
             for line in f:
                 sql.append(line.rstrip())
         return sql
 
     def tablenames(self):
-        """Parse sql insert statements to determine table names.
-        """
-        prefix = 'insert into '
+        """Parse sql insert statements to determine table names."""
+        prefix = "insert into "
         names = list()
         for line in self.__sql:
-            if line[:len(prefix)] == prefix:
-                names.append(line[len(prefix):line.find('(')].strip())
+            if line[: len(prefix)] == prefix:
+                names.append(line[len(prefix) : line.find("(")].strip())
         names = sorted(list(set(names)))
-        names.remove('#AOK values')
+        names.remove("#AOK values")
         return names
 
     def rows_from_sql(self, tablename):
         """Return dictionary for each row in the specified table.
         Dictionary keys may differ for each sql insert statement.
         """
-        prefix = 'insert into ' + tablename + ' '
+        prefix = "insert into " + tablename + " "
         rows = list()
         for line in self.__sql:
-            if line[:len(prefix)] == prefix:
-                keyval_str = line[len(prefix):].strip()
-                keystr, valstr = keyval_str.split('values')
-                keys = [k.strip() for k in keystr[2:-2].split(',')]
-                vals = [v.strip() for v in valstr[2:-2].split(',')]
+            if line[: len(prefix)] == prefix:
+                keyval_str = line[len(prefix) :].strip()
+                keystr, valstr = keyval_str.split("values")
+                keys = [k.strip() for k in keystr[2:-2].split(",")]
+                vals = [v.strip() for v in valstr[2:-2].split(",")]
                 keyval_dict = dict(zip(keys, vals))
                 rows.append(keyval_dict)
         return rows
@@ -76,15 +75,17 @@ class Sqlfile:
         for key in keys:
             col = list()
             for row in rows:
-                col.append(row.get(key, ''))
+                col.append(row.get(key, ""))
             try:
                 col = [int(x) for x in col]
             except ValueError:
                 try:
                     col = [float(x) for x in col]
                 except ValueError:
-                    col = [x[1:-1] if x.startswith("'") and x.endswith("'") \
-                            else x for x in col]
+                    col = [
+                        x[1:-1] if x.startswith("'") and x.endswith("'") else x
+                        for x in col
+                    ]
             table[key] = col
         return table
 
@@ -109,10 +110,11 @@ class Sqlfile:
         """
         out = table.copy(copy_data=False)
         for key in out.keys():
-            newkey = key.replace('_', ' ')
+            newkey = key.replace("_", " ")
             if newkey != key:
                 out.rename_column(key, newkey)
         out.show_in_browser(jsviewer=True, show_row_index=False)
+
 
 def main():
     args = arguments()
@@ -120,9 +122,10 @@ def main():
     if args.tablename:
         table = sql.table(args.tablename, browser=True)
     else:
-        print('specify a table name as the second argument:')
+        print("specify a table name as the second argument:")
         for name in sql.tablenames:
             print(name)
+
 
 if __name__ == "__main__":
     main()
