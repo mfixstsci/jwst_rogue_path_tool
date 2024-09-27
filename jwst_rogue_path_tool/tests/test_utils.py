@@ -34,4 +34,3 @@ def test_absolute_magnitude(magnitude, expected):
 def test_get_pivot_wavelength(pupil, filter, expected):
     pivot_wavelength = get_pivot_wavelength(pupil, filter)
     pivot_wavelength == expected
-
