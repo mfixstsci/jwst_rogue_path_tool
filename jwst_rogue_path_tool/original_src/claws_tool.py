@@ -51,7 +51,7 @@ class apt_program:
 
         self.exptable = sql.table("exposures").to_pandas()
         try:
-            self.targtable = sql.table("fixed_target").to_pandas()
+            self.targtable
         except:
             print("**** This is a moving target program, exiting ****")
             assert False

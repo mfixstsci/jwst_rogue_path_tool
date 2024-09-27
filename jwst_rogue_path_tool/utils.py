@@ -1,5 +1,6 @@
 """Utility funcitons for JWST Rogue Path Tool
 
+
 Authors
 -------
     - Mario Gennaro
@@ -47,7 +48,7 @@ def calculate_background(ra, dec, wavelength, threshold):
 
     Returns
     -------
-    background_data : 
+    background_data :
     """
     background_data = jbt.background(ra, dec, wavelength=wavelength, thresh=threshold)
     return background_data
@@ -60,7 +61,7 @@ def get_pupil_from_filter(filters):
     ----------
     filters : list
         List of NRC filter names
-    
+
     Returns
     -------
     pupils : dict
@@ -103,7 +104,7 @@ def get_pivot_wavelength(pupil, filter):
     """
     filter_filename = pathlib.Path(PROJECT_DIRNAME) / "data" / "filter_data.txt"
 
-    filter_table = pd.read_csv(filter_filename, sep="\s+")
+    filter_table = pd.read_csv(filter_filename, sep="\s+")  # noqa
 
     if pupil == "CLEAR":
         check_value = filter
@@ -113,7 +114,8 @@ def get_pivot_wavelength(pupil, filter):
     BM = filter_table["Filter"] == check_value
     pivot_wavelength = filter_table.loc[BM, "Pivot"].values[0]
 
-    return pivot_wavelength 
+    return pivot_wavelength
+
 
 def make_output_directory(directory_name):
     """Make output directories for figures and text files.
