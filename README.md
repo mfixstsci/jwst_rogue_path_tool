@@ -4,10 +4,10 @@ Module to predict the presence of the stray-light artifacts know as claws in NIR
 
 ## Installation for Users
 
-To install `jwql`, simply use `pip`:
+To install `jwst_rogue_path_tool`, simply use `pip`:
 
 ```
-pip install jwql
+pip install jwst_rogue_path_tool
 ```
 
 To install from source:
@@ -17,7 +17,7 @@ git clone git@github.com:spacetelescope/jwst_rogue_path_tool.git
 ```
 2. Install requirements
 ```
-pip install -e .
+pip install .
 ```
 
 ## Outputs
