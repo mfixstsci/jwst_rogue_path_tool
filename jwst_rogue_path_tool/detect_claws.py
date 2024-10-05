@@ -16,7 +16,7 @@ Authors
 
 import collections
 from copy import deepcopy
-from itertools import chain
+from itertools import chain, groupby
 import operator
 import os
 
@@ -63,7 +63,7 @@ class aptProgram:
         usr_defined_angles=None,
         bkg_params=[
             {"threshold": 0.1, "function": np.min},
-            {"threshold": 0.2, "function": np.median},
+            {"threshold": 0.2, "function": np.mean},
         ],
     ):
         """
@@ -322,16 +322,66 @@ class aptProgram:
         self.__get_flux_vs_angle()
         self.__find_background_thresholds()
 
-    def make_report(self, observation, output_directory=None):
+    def make_background_report(self, observation, output_directory):
+        """Write reports for background restricted position angles (PA's).
+        This will create a report for the module(s) in the observation provided, this
+        means that the resulting PA's will be PA's that are flagged across
+        all filters in the observaion for that module.
+
+        observation : dict
+            Observation out of observations.data attribute
+
+        output_directory : str
+            Output directory path
+        """
+        obs_id = observation["visit"]["observation"].values[0]
+        program = observation["nircam_templates"]["program"].values[0]
+        modules = observation["exposure_frames"].susceptibility_region.keys()
+        functions = [params["function"].__name__ for params in self.bkg_parameters]
+        thresholds = [params["threshold"] for params in self.bkg_parameters]
+
+        path = pathlib.Path(output_directory)
+        path = path / str(program) / "valid_angle_reports"
+        make_output_directory(path)
+
+        if path.is_dir():
+            # Make reports for valid PAs impacted by background measurements
+            for module in modules:
+                filename = f"program_{program}_observation_{obs_id}_background_module_{module}.txt"
+                full_file_path = path / filename
+                f = open(full_file_path, "a")
+                f.write("**** Ranges Not Impacted by Background Thresholds ****\n")
+                f.write(f"**** Module {module} ****\n")
+                for threshold, function in zip(thresholds, functions):
+                    f.write(f"**** Ranges Under {threshold} of {function}  ****\n")
+                    data = observation["flux_boolean"][
+                        f"flux_boolean_{function}_{module}"
+                    ]
+
+                    # Get all of the non-zero (below statistical measure of background)
+                    non_background_impacted = data.nonzero()[0]
+
+                    for _, g in groupby(
+                        enumerate(non_background_impacted), lambda k: k[0] - k[1]
+                    ):
+                        start = next(g)[1]
+                        end = list(v for _, v in g) or [start]
+
+                        f.write(f"PA Start -- PA End: {start} -- {end[-1]}\n")
+                f.close()
+        else:
+            raise Exception(f"CAN NOT WRITE TO {path}, NOT A VALID DIRECTORY")
+
+    def make_report(self, observation, output_directory):
         """Display of write "observation level" report given an observation in a program.
 
         Parameters
         ----------
-        filename : str
-            Name of file to write report into.
-
         observation : dict
             Observation out of observations.data attribute
+
+        output_directory : str
+            Output directory path
         """
 
         obs_id = observation["visit"]["observation"].values[0]
@@ -340,32 +390,24 @@ class aptProgram:
         all_starting_angles = observation["valid_starts_angles"]
         all_ending_angles = observation["valid_ends_angles"]
 
-        if output_directory:
-            path = pathlib.Path(output_directory)
-            path = path / str(program) / "valid_angle_reports"
-            make_output_directory(path)
+        path = pathlib.Path(output_directory)
+        path = path / str(program) / "valid_angle_reports"
+        make_output_directory(path)
 
-            if path.is_dir():
-                filename = (
-                    f"program_{program}_observation_{obs_id}_valid_angle_report.txt"
-                )
+        if path.is_dir():
+            filename = f"program_{program}_observation_{obs_id}_valid_angle_report.txt"
 
-                full_file_path = path / filename
+            full_file_path = path / filename
 
-                f = open(full_file_path, "a")
-                f.write(f"**** Valid Ranges for Observation {obs_id} ****\n")
-                for min_angle, max_angle in zip(all_starting_angles, all_ending_angles):
-                    f.write(f"PA Start -- PA End: {min_angle} -- {max_angle}\n")
-                f.close()
-                print(f"WROTE REPORT TO {full_file_path}")
-            else:
-                raise Exception(f"CAN NOT WRITE TO {path}, NOT A VALID DIRECTORY")
-        else:
-            print("NO OUTPUT DIRECTORY PROVIDED, DISPLAYING RESULTS")
-            print("================================================")
-            print(f"**** Valid Ranges for Observation {obs_id} ****\n")
+            f = open(full_file_path, "a")
+            f.write(f"**** Valid Ranges for Observation {obs_id} ****\n")
             for min_angle, max_angle in zip(all_starting_angles, all_ending_angles):
-                print(f"PA Start -- PA End: {min_angle} -- {max_angle}\n")
+                f.write(f"PA Start -- PA End: {min_angle} -- {max_angle}\n")
+            f.close()
+            print(f"WROTE REPORT TO {full_file_path}")
+
+        else:
+            raise Exception(f"CAN NOT WRITE TO {path}, NOT A VALID DIRECTORY")
 
 
 class observations:
