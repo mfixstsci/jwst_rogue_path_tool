@@ -23,8 +23,12 @@ jobs:
       - name: Install pip/pytest
         run: |
           python -m pip install --upgrade pip
-          pip install flake8 pytest
+          pip install pycodestyle pytest
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Lint Check
+        run: |
+          pycodestyle --ignore=E501,W503,W504 --exclude=jwst_rogue_path_tool/original_src/* jwst_rogue_path_tool/*
 
       - name: Install Package and Test
         run: | 

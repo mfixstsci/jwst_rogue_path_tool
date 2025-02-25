@@ -70,7 +70,7 @@ class aptSqlFile:
 
         for line in self.__sql:
             if line[: len(prefix)] == prefix:
-                keyval_str = line[len(prefix) :].strip()
+                keyval_str = line[len(prefix):].strip()
                 keystr, valstr = keyval_str.split("values")
                 keys = [k.strip() for k in keystr[2:-2].split(",")]
                 vals = [v.strip() for v in valstr[2:-2].split(",")]
@@ -90,7 +90,7 @@ class aptSqlFile:
 
         for line in self.__sql:
             if line[: len(prefix)] == prefix:
-                names.append(line[len(prefix) : line.find("(")].strip())
+                names.append(line[len(prefix):line.find("(")].strip())
 
         names = sorted(list(set(names)))
 
