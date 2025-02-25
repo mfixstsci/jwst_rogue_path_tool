@@ -399,7 +399,7 @@ class aptProgram:
 
             full_file_path = path / filename
 
-            f = open(full_file_path, "a")
+            f = open(full_file_path, "w")
             f.write(f"**** Valid Ranges for Observation {obs_id} ****\n")
             for min_angle, max_angle in zip(all_starting_angles, all_ending_angles):
                 f.write(f"PA Start -- PA End: {min_angle} -- {max_angle}\n")
