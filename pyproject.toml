@@ -16,6 +16,7 @@ dependencies = [
     "jupyter>=1.0.0",
     "jwst_backgrounds>=1.2.0",
     "matplotlib>=3.7.2",
+    "notebook>=7.2.1",
     "numpy>=1.25.1",
     "pandas>=2.0.3",
     "pip>=23.1.2",
