@@ -349,7 +349,7 @@ class aptProgram:
             for module in modules:
                 filename = f"program_{program}_observation_{obs_id}_background_module_{module}.txt"
                 full_file_path = path / filename
-                f = open(full_file_path, "a")
+                f = open(full_file_path, "w")
                 f.write("**** Ranges Not Impacted by Background Thresholds ****\n")
                 f.write(f"**** Module {module} ****\n")
                 for threshold, function in zip(thresholds, functions):
