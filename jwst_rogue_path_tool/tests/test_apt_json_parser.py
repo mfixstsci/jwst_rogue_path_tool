@@ -7,7 +7,7 @@ from pathlib import Path
 from jwst_rogue_path_tool.program_data_parser import aptJsonFile
 from jwst_rogue_path_tool.constants import PROJECT_DIRNAME
 
-JSON_PATH = Path(PROJECT_DIRNAME) / "data" / "APT_test_4RPtool.json"
+JSON_PATH = Path(PROJECT_DIRNAME) / "data" / "APT_test_4RPtool.records.json"
 
 
 def test_json_exists(json_path=JSON_PATH):
