@@ -29,7 +29,7 @@ from pysiaf.utils import rotations
 from scipy.ndimage import gaussian_filter
 from tqdm import tqdm
 
-from jwst_rogue_path_tool.apt_sql_parser import aptSqlFile
+from jwst_rogue_path_tool.program_data_parser import aptJsonFile
 from jwst_rogue_path_tool.constants import (
     PROJECT_DIRNAME,
     SUSCEPTIBILITY_REGION_FULL,
@@ -57,7 +57,7 @@ class aptProgram:
 
     def __init__(
         self,
-        sqlfile,
+        jsonfile,
         angular_step=1.0,
         usr_defined_obs=None,
         usr_defined_angles=None,
@@ -69,8 +69,8 @@ class aptProgram:
         """
         Parameters
         ----------
-        sqlfile : str
-            Path to an APT-exported sql file
+        jsonfile : str
+            Path to an APT-exported JSON file
 
         angular_step : float
             Attitude angle step size used to check if surrounding targets land
@@ -90,8 +90,8 @@ class aptProgram:
             https://github.com/spacetelescope/jwst_backgrounds
         """
 
-        self.__sql = aptSqlFile(sqlfile)
-        if "fixed_target" not in self.__sql.tablenames:
+        self.json = aptJsonFile(jsonfile)
+        if "fixed_target" not in self.json.tablenames:
             raise Exception("JWST Rogue Path Tool only supports fixed targets")
 
         self.angular_step = angular_step
@@ -120,7 +120,7 @@ class aptProgram:
 
     def __build_observations(self):
         """Convenience method to build Observation objects"""
-        self.observations = observations(self.__sql, self.usr_defined_obs)
+        self.observations = observations(self.json, self.usr_defined_obs)
 
     def __build_exposure_frames(self):
         """Convenience method to build ExposureFrame objects"""
@@ -268,7 +268,7 @@ class aptProgram:
 
     def get_target_information(self):
         """Obtain RA and Dec of target from APT SQL file"""
-        target_info = self.__sql.build_aptsql_dataframe("fixed_target")
+        target_info = self.json.build_dataframe("fixed_target")
 
         self.ra = target_info["ra_computed"][0]
         self.dec = target_info["dec_computed"][0]
@@ -349,7 +349,7 @@ class aptProgram:
             for module in modules:
                 filename = f"program_{program}_observation_{obs_id}_background_module_{module}.txt"
                 full_file_path = path / filename
-                f = open(full_file_path, "a")
+                f = open(full_file_path, "w")
                 f.write("**** Ranges Not Impacted by Background Thresholds ****\n")
                 f.write(f"**** Module {module} ****\n")
                 for threshold, function in zip(thresholds, functions):
@@ -399,7 +399,7 @@ class aptProgram:
 
             full_file_path = path / filename
 
-            f = open(full_file_path, "a")
+            f = open(full_file_path, "w")
             f.write(f"**** Valid Ranges for Observation {obs_id} ****\n")
             for min_angle, max_angle in zip(all_starting_angles, all_ending_angles):
                 f.write(f"PA Start -- PA End: {min_angle} -- {max_angle}\n")
@@ -416,7 +416,7 @@ class observations:
     associated with it.
     """
 
-    def __init__(self, apt_sql, usr_defined_obs=None):
+    def __init__(self, apt_json, usr_defined_obs=None):
         """
         Parameters
         ----------
@@ -426,7 +426,7 @@ class observations:
         usr_defined_obs : list
             List of specific oberservations to load from program
         """
-        self.__sql = apt_sql
+        self.json = apt_json
         self.program_data_by_observation(usr_defined_obs)
         self.observation_number_list = self.data.keys()
         self.drop_unsupported_observations()
@@ -491,14 +491,14 @@ class observations:
             List of observations defined by user.
         """
         program_data_by_observation_id = collections.defaultdict(dict)
-        target_information = self.__sql.build_aptsql_dataframe("fixed_target")
+        target_information = self.json.build_dataframe("fixed_target")
         for table in [
             "visit",
             "exposures",
             "nircam_exposure_specification",
             "nircam_templates",
         ]:
-            df = self.__sql.build_aptsql_dataframe(table)
+            df = self.json.build_dataframe(table)
 
             unique_obs = df["observation"].unique()
 
