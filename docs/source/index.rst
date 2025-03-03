@@ -6,10 +6,7 @@
 JWST Rogue Path Tool documentation
 ==================================
 
-Add your content using ``reStructuredText`` syntax. See the
-`reStructuredText <https://www.sphinx-doc.org/en/master/usage/restructuredtext/index.html>`_
-documentation for details.
-
+Module to predict the presence of the stray-light artifacts know as claws in NIRCam Imaging observations.
 
 API documentation
 =================
