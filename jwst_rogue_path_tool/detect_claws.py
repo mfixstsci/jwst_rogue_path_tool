@@ -753,10 +753,8 @@ class exposureFrames:
         When an exposure frame uses both modules, "targets_in" and "targets_loc"
         are two-dimensional.
 
-        ```
                          A      B         A      B          A      B
         "targets_in" : [True, True] or [False, True] ... [False, False]
-        ```
         """
         ra, dec = self.catalog["ra"], self.catalog["dec"]
         self.swept_angles = {}

@@ -1,6 +1,5 @@
 """Utility funcitons for JWST Rogue Path Tool
 
-
 Authors
 -------
     - Mario Gennaro
@@ -34,21 +33,6 @@ def absolute_magnitude(band_magnitude):
 
 def calculate_background(ra, dec, wavelength, threshold):
     """Calculate background using JWST Backgrounds Tool
-
-    Parameters
-    ----------
-    ra : float
-        Right acension of target
-    dec : float
-        Declination of target
-    wavelength : float
-        ????
-    threshold : floaf
-        ????
-
-    Returns
-    -------
-    background_data :
     """
     background_data = jbt.background(ra, dec, wavelength=wavelength, thresh=threshold)
     return background_data

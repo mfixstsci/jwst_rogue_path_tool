@@ -2,9 +2,9 @@
 jwst_rogue_path_tool
 ********************
 
-apt_sql_parser.py
------------------
-.. automodule:: jwst_rogue_path_tool.apt_sql_parser
+program_data_parser.py
+----------------------
+.. automodule:: jwst_rogue_path_tool.program_data_parser
     :members:
     :undoc-members:
 
