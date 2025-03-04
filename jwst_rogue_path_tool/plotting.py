@@ -1,10 +1,11 @@
 """
 This module contains all of the plotting functions for the JWST Rogue Path Tool.
 Plotting output include:
-    * Valid angles at the exposure level
-    * Valid angles at the observation level
-    * Susceptibility region footprint w source intensities.
-    * V3 position angles vs flux at the observation level.
+
+* Valid angles at the exposure level
+* Valid angles at the observation level
+* Susceptibility region footprint w source intensities.
+* V3 position angles vs flux at the observation level.
 
 Authors
 -------
@@ -35,7 +36,7 @@ def create_exposure_plots(observation, ra, dec, output_directory=None, **kwargs)
         Declination in degrees
 
     **kwarg : dict
-        Arbitrary keyword arguements
+        Arbitrary keyword arguments
     """
 
     plt.rcParams["figure.figsize"] = (20, 15)
@@ -132,7 +133,7 @@ def create_observation_plot(observation, ra, dec, output_directory=None, **kwarg
         Declination in degrees
 
     **kwarg : dict
-        Arbitrary keyword arguements
+        Arbitrary keyword arguments
     """
 
     plt.rcParams["figure.figsize"] = (10, 10)

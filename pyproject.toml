@@ -12,7 +12,6 @@ requires-python = ">=3.9"
 dependencies = [
     "astropy>=5.3.1",
     "astroquery>=0.4.7",
-    "furo>=2024.8.6",
     "jupyter>=1.0.0",
     "jwst_backgrounds>=1.2.0",
     "matplotlib>=3.7.2",
@@ -22,6 +21,9 @@ dependencies = [
     "pip>=23.1.2",
     "pysiaf>=0.22.0",
     "scipy>=1.12.0",
+    "sphinx>=8.0.2",
+    "sphinx-rtd-theme>=3.0.2", 
+    "stsci_rtd_theme>=1.0.1",
     "tqdm>=4.66.2",
 ]
 

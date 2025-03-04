@@ -5,6 +5,7 @@
 
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
+import stsci_rtd_theme
 
 project = 'JWST Rogue Path Tool'
 copyright = '2024, Mario Gennaro, Mees B. Fix'
@@ -24,5 +25,6 @@ exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
-html_theme = 'furo'
+html_theme = 'stsci_rtd_theme'
 html_static_path = ['_static']
+html_theme_path = [stsci_rtd_theme.get_html_theme_path()]
