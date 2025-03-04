@@ -2,7 +2,7 @@
 This module contains objects that perform the data organizing and analysis
 routines for detecting "Claw" anomalies with NIRCam.
 
-The AptProgram class accepts an APT sql file that organizes data with observations,
+The AptProgram class accepts an APT JSON file that organizes data with observations,
 visits, exposures and parses them into python objects (mainly pandas dataframes).
 
 These data are then used to calculate whether exposures and observations are susceptible
@@ -51,7 +51,7 @@ from jwst_rogue_path_tool.utils import (
 
 class aptProgram:
     """Class that handles the APT-program-level information.
-    aptProgram takes the sqlfile input and uses the "observations" and "exposureFrame"
+    aptProgram takes the JSON file input and uses the "observations" and "exposureFrame"
     objects to organize data into python objects that can be used for various analyses.
     """
 
@@ -267,7 +267,7 @@ class aptProgram:
             observation["flux_boolean"] = flux_boolean
 
     def get_target_information(self):
-        """Obtain RA and Dec of target from APT SQL file"""
+        """Obtain RA and Dec of target from APT JSON file"""
         target_info = self.json.build_dataframe("fixed_target")
 
         self.ra = target_info["ra_computed"][0]
@@ -411,7 +411,7 @@ class aptProgram:
 
 
 class observations:
-    """Class the organizes metadata from APT SQL file into python object.
+    """Class the organizes metadata from APT JSON file into python object.
     This object is organized by observation number and contains metadata
     associated with it.
     """
@@ -420,8 +420,8 @@ class observations:
         """
         Parameters
         ----------
-        apt_sql : jwst_rogue_path_tool.apt_sql_parser.AptSqlFile
-            Parsed SQL data into python objects (pandas dataframes)
+        apt_json : jwst_rogue_path_tool.program_data_parser.aptJsonFile
+            Parsed JSON data into python objects (pandas dataframes)
 
         usr_defined_obs : list
             List of specific oberservations to load from program
