@@ -322,6 +322,8 @@ class aptProgram:
         self.__get_flux_vs_angle()
         self.__find_background_thresholds()
 
+    from itertools import groupby
+
     def make_background_report(self, observation, output_directory):
         """Write reports for background restricted position angles (PA's).
         This will create a report for the module(s) in the observation provided, this
@@ -345,30 +347,55 @@ class aptProgram:
         make_output_directory(path)
 
         if path.is_dir():
-            # Make reports for valid PAs impacted by background measurements
-            for module in modules:
-                filename = f"program_{program}_observation_{obs_id}_background_module_{module}.txt"
+            if len(modules) > 1:
+                data = {}
+                filename = (
+                    f"program_{program}_observation_{obs_id}_background_module_A_B.txt"
+                )
                 full_file_path = path / filename
                 f = open(full_file_path, "w")
-                f.write("**** Ranges Not Impacted by Background Thresholds ****\n")
-                f.write(f"**** Module {module} ****\n")
                 for threshold, function in zip(thresholds, functions):
+                    data["A"] = observation["flux_boolean"][
+                        f"flux_boolean_{function}_{'A'}"
+                    ].nonzero()[0]
+
+                    data["B"] = observation["flux_boolean"][
+                        f"flux_boolean_{function}_{'B'}"
+                    ].nonzero()[0]
+
+                    valid_pa_angles = np.intersect1d(data["A"], data["B"])
+
+                    f.write("**** Ranges Not Impacted by Background Thresholds ****\n")
+                    f.write("**** Modules A + B ****\n")
                     f.write(f"**** Ranges Under {threshold} of {function}  ****\n")
-                    data = observation["flux_boolean"][
-                        f"flux_boolean_{function}_{module}"
-                    ]
-
-                    # Get all of the non-zero (below statistical measure of background)
-                    non_background_impacted = data.nonzero()[0]
-
                     for _, g in groupby(
-                        enumerate(non_background_impacted), lambda k: k[0] - k[1]
+                        enumerate(valid_pa_angles), lambda k: k[0] - k[1]
+                    ):
+                        start = next(g)[1]
+                        end = list(v for _, v in g) or [start]
+                        f.write(f"PA Start -- PA End: {start} -- {end[-1]}\n")
+            else:
+                single_module = list(modules)[0]
+                filename = f"program_{program}_observation_{obs_id}_background_module_{single_module}.txt"
+                full_file_path = path / filename
+                f = open(full_file_path, "w")
+                for threshold, function in zip(thresholds, functions):
+                    valid_pa_angles = observation["flux_boolean"][
+                        f"flux_boolean_{function}_{single_module}"
+                    ].nonzero()[0]
+
+                    f.write("**** Ranges Not Impacted by Background Thresholds ****\n")
+                    f.write(f"**** Module {single_module} ****\n")
+                    f.write(f"**** Ranges Under {threshold} of {function}  ****\n")
+                    for _, g in groupby(
+                        enumerate(valid_pa_angles), lambda k: k[0] - k[1]
                     ):
                         start = next(g)[1]
                         end = list(v for _, v in g) or [start]
 
                         f.write(f"PA Start -- PA End: {start} -- {end[-1]}\n")
-                f.close()
+            print(f"WROTE FILE TO: {full_file_path}")
+            f.close()
         else:
             raise Exception(f"CAN NOT WRITE TO {path}, NOT A VALID DIRECTORY")
 
