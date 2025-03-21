@@ -402,7 +402,7 @@ def create_v3pa_vs_flux_plot(observation, output_directory=None, fontsize=15):
 
             axes[fltr, mod].set_yscale("log")
             axes[fltr, mod].set_xlabel("V3PA", fontsize=fontsize)
-            axes[fltr, mod].set_ylabel(f"DN/pix/ks ({filter})", fontsize=fontsize)
+            axes[fltr, mod].set_ylabel(f"DN/pix/ks ({pupil if pupil != 'CLEAR' else filter})", fontsize=fontsize)
             axes[fltr, mod].set_ylim(0.005, 500)
             axes[fltr, mod].legend(
                 loc="lower right", fontsize=fontsize - (fontsize / 4)
