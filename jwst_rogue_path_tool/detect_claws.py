@@ -45,6 +45,7 @@ from jwst_rogue_path_tool.utils import (
     calculate_background,
     get_pupil_from_filter,
     get_pivot_wavelength,
+    get_photmjsr,
     make_output_directory,
 )
 
@@ -231,6 +232,7 @@ class aptProgram:
                             pupil = row["pupils"]
                             filter = row["filters"]
                             pivot_wavelength = get_pivot_wavelength(pupil, filter)
+                            photmjsr = get_photmjsr(pupil, filter)
                             background = calculate_background(
                                 self.ra, self.dec, pivot_wavelength, threshold
                             )
@@ -239,7 +241,7 @@ class aptProgram:
                             lam_thresh = (
                                 threshold
                                 * statistic_function(wavelengths)
-                                / pivot_wavelength
+                                / photmjsr
                                 * 1000.0
                             )
 
