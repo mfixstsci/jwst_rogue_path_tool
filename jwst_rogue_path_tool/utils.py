@@ -101,6 +101,36 @@ def get_pivot_wavelength(pupil, filter):
     return pivot_wavelength
 
 
+def get_photmjsr(pupil, filter):
+    """Get photmjsr values from filter_data.txt
+
+    Parameters
+    ----------
+    pupil : str
+        NRC pupil name
+    filter : str
+        NRC filter name
+
+    Returns
+    -------
+    photmjsr : float
+        Flux conversion factor from DN/s to MJy/sr of filter/pupil
+    """
+    filter_filename = pathlib.Path(PROJECT_DIRNAME) / "data" / "filter_data.txt"
+
+    filter_table = pd.read_csv(filter_filename, sep="\s+")  # noqa
+
+    if pupil == "CLEAR":
+        check_value = filter
+    else:
+        check_value = pupil
+
+    BM = filter_table["Filter"] == check_value
+    photmjsr = filter_table.loc[BM, "photmjsr"].values[0]
+
+    return photmjsr
+
+
 def make_output_directory(directory_name):
     """Make output directories for figures and text files.
 
